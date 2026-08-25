@@ -1,0 +1,37 @@
+# Secrets
+.env
+.env.*.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.joblib
+models/
+
+# Node / Next.js
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/.env*.local
+
+# Docker volumes (données locales)
+postgres_data/
+ollama_models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

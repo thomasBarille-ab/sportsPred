@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface text-slate-100;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-card border border-border rounded-xl p-6;
+  }
+  .stat-value {
+    @apply text-3xl font-bold text-white;
+  }
+  .stat-label {
+    @apply text-sm text-muted mt-1;
+  }
+  .badge-success {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-success/20 text-success;
+  }
+  .badge-danger {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-danger/20 text-danger;
+  }
+  .badge-neutral {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-600/40 text-slate-300;
+  }
+}
