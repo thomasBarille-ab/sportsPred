@@ -46,9 +46,9 @@ type Log = {
 };
 
 export default function LogEntry({ log }: { log: Log }) {
-  const [expanded, setExpanded] = useState(false);
   const steps: Step[] = log.details?.steps ?? [];
   const hasSteps = steps.length > 0;
+  const [expanded, setExpanded] = useState(hasSteps);
 
   const statusDot =
     log.status === "success"
@@ -111,6 +111,12 @@ export default function LogEntry({ log }: { log: Log }) {
       {log.errorMessage && (
         <div className="px-4 py-2 bg-red-500/10 text-red-400 text-xs font-mono border-t border-border whitespace-pre-wrap break-all">
           {log.errorMessage.slice(0, 400)}
+        </div>
+      )}
+
+      {!hasSteps && log.status !== "running" && (
+        <div className="px-6 py-2 text-xs text-slate-600 border-t border-border/30 italic">
+          Aucun détail — ce run date d&apos;avant les logs enrichis.
         </div>
       )}
 

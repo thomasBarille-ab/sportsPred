@@ -162,5 +162,8 @@ def start_scheduler(cfg: Settings) -> None:
         id="retrain", name="Réentraînement modèles",
     )
 
+    from .trigger_server import start_trigger_server
+    start_trigger_server(scheduler)
+
     log.info("scheduler.started", jobs=[j.id for j in scheduler.get_jobs()])
     scheduler.start()

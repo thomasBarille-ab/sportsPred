@@ -82,10 +82,13 @@ services:
       RETRAIN_WEEKDAY: ${RETRAIN_WEEKDAY:-mon}
       RETRAIN_HOUR_UTC: ${RETRAIN_HOUR_UTC:-3}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PREDICTOR_URL: http://predictor:8080
     volumes:
       - predictor_models:/models
     networks:
       - sports-net
+    expose:
+      - "8080"
 
   # ── Dashboard Next.js ─────────────────────────────────────────────────────
   sports-dashboard:
@@ -99,6 +102,7 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_URL: postgresql://sports:${POSTGRES_PASSWORD}@postgres-sports:5432/sports
+      PREDICTOR_URL: http://predictor:8080
     networks:
       - sports-net
     expose:

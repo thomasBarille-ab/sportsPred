@@ -1,14 +1,17 @@
 import { getAgentLogs } from "@/lib/db";
 import LogEntry from "@/components/LogEntry";
+import TriggerButton from "@/components/TriggerButton";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const STATUS_COUNT_STYLES: Record<string, string> = {
+const STATUS_STYLES: Record<string, string> = {
   success: "text-emerald-400",
   failed: "text-red-400",
   running: "text-yellow-400",
 };
+
+const JOBS = ["ingest", "predict", "evaluate", "retrain"];
 
 export default async function LogsPage() {
   const logs = await getAgentLogs(100);
@@ -23,19 +26,32 @@ export default async function LogsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Logs de l&apos;agent</h1>
-        <div className="flex gap-4 text-sm">
-          {Object.entries(counts).map(([status, n]) => (
-            <span key={status} className={STATUS_COUNT_STYLES[status] ?? "text-muted"}>
-              {n} {status}
-            </span>
-          ))}
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-2xl font-bold">Logs de l&apos;agent</h1>
+          <div className="flex gap-4 mt-1 text-sm">
+            {Object.entries(counts).map(([status, n]) => (
+              <span key={status} className={STATUS_STYLES[status] ?? "text-muted"}>
+                {n} {status}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Boutons de déclenchement manuel */}
+        <div className="flex-shrink-0">
+          <p className="text-xs text-muted mb-2">Déclencher manuellement :</p>
+          <div className="flex flex-wrap gap-2">
+            {JOBS.map((job) => (
+              <TriggerButton key={job} job={job} />
+            ))}
+          </div>
         </div>
       </div>
 
       <p className="text-xs text-muted">
-        Cliquez sur un run pour dérouler ses étapes détaillées.
+        Les logs avec des étapes détaillées (▼) apparaissent uniquement pour les runs effectués après la mise à jour du predictor.
+        Cliquez sur une ligne pour replier ses étapes.
       </p>
 
       <div className="space-y-2">
