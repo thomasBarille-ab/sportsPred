@@ -7,7 +7,12 @@ from datetime import datetime
 import structlog
 
 from ..db import session
-from ..training.champion_challenger import maybe_promote, register_model_version
+from ..training.champion_challenger import (
+    IMPROVEMENT_THRESHOLD,
+    get_production_model,
+    maybe_promote,
+    register_model_version,
+)
 from ..training.trainer import TrainResult, train_model
 
 log = structlog.get_logger()
@@ -16,7 +21,6 @@ log = structlog.get_logger()
 def run_retrain(sport: str, model_storage_path: str) -> dict:
     log.info("retrain.start", sport=sport)
 
-    # Récupère tous les matchs terminés depuis la DB
     all_matches = session.fetch_all(
         """
         SELECT f.home_team_id, f.away_team_id, f.match_date,
@@ -28,9 +32,25 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         (sport,),
     )
 
+    log.info(
+        "retrain.données",
+        sport=sport,
+        matchs_historiques=len(all_matches),
+        seuil_minimum=60,
+    )
+
     if len(all_matches) < 60:
-        log.warning("retrain.insufficient_data", sport=sport, n=len(all_matches))
+        log.warning(
+            "retrain.données_insuffisantes",
+            sport=sport,
+            n=len(all_matches),
+            manquants=60 - len(all_matches),
+            action="skip — entraînement annulé",
+        )
         return {"status": "skipped", "reason": "insufficient_data", "n_matches": len(all_matches)}
+
+    log.info("retrain.entraînement_en_cours", sport=sport,
+             note="XGBoost — 400 estimateurs, profondeur max 4, lr 0.05")
 
     try:
         result: TrainResult = train_model(
@@ -39,13 +59,38 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
             model_storage_path=model_storage_path,
         )
     except ValueError as exc:
-        log.error("retrain.train_failed", sport=sport, error=str(exc))
+        log.error("retrain.échec_entraînement", sport=sport, erreur=str(exc))
         return {"status": "failed", "error": str(exc)}
 
-    # Génère un numéro de version basé sur le timestamp
+    log.info(
+        "retrain.résultats_challenger",
+        sport=sport,
+        train_samples=result.training_samples,
+        holdout_samples=result.holdout_samples,
+        holdout_brier=round(result.holdout_brier, 5),
+        holdout_logloss=round(result.holdout_logloss, 5),
+        holdout_accuracy=f"{result.holdout_accuracy:.1%}",
+    )
+
+    # Comparaison avec le champion actuel
+    champion = get_production_model(sport)
+    if champion:
+        delta = champion["holdout_brier"] - result.holdout_brier
+        log.info(
+            "retrain.comparaison_champion_challenger",
+            sport=sport,
+            champion_brier=round(champion["holdout_brier"], 5),
+            challenger_brier=round(result.holdout_brier, 5),
+            delta=f"{delta:+.5f}",
+            seuil=IMPROVEMENT_THRESHOLD,
+            verdict="challenger GAGNE" if delta >= IMPROVEMENT_THRESHOLD else f"champion conservé (delta {delta:.5f} < {IMPROVEMENT_THRESHOLD})",
+        )
+    else:
+        log.info("retrain.premier_modèle", sport=sport,
+                 note="Aucun champion existant — promotion automatique")
+
     version = datetime.utcnow().strftime("v%Y%m%d_%H%M")
 
-    # Récupère le path du modèle sauvegardé depuis le trainer
     import glob
     import os
     pattern = os.path.join(model_storage_path, sport, "model_*.joblib")
@@ -68,13 +113,11 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
     promoted = maybe_promote(sport, version_id, result.holdout_brier, result.holdout_samples)
 
     log.info(
-        "retrain.done",
+        "retrain.terminé",
         sport=sport,
         version=version,
-        version_id=version_id,
-        holdout_brier=round(result.holdout_brier, 5),
-        holdout_accuracy=round(result.holdout_accuracy, 3),
-        promoted=promoted,
+        promu_en_production=promoted,
+        action="Le nouveau modèle prend le relais" if promoted else "L'ancien modèle reste en production",
     )
 
     return {

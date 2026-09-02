@@ -45,7 +45,13 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
     from_date = today - timedelta(days=7)
     to_date   = today + timedelta(days=14)
 
-    log.info("ingest.start", sport=sport, from_date=str(from_date), to_date=str(to_date))
+    log.info(
+        "ingest.start",
+        sport=sport,
+        fenêtre=f"{from_date} → {to_date}",
+        passé_jours=7,
+        futur_jours=14,
+    )
     n_upcoming = n_results = 0
 
     try:
@@ -53,11 +59,16 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
         for fx in upcoming:
             _upsert_fixture(fx)
         n_upcoming = len(upcoming)
-        log.info("ingest.upcoming_done", sport=sport, count=n_upcoming)
+        log.info(
+            "ingest.matchs_à_venir",
+            sport=sport,
+            upsertés=n_upcoming,
+            note="fixtures créées ou mises à jour (statut, scores)",
+        )
 
         results = provider.fetch_recent_results(from_date, today)
+        n_nouveaux_résultats = 0
         for r in results:
-            # Met à jour le score dans fixtures
             session.execute(
                 """
                 UPDATE fixtures
@@ -66,7 +77,6 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
                 """,
                 (r.home_score, r.away_score, r.external_id, r.sport),
             )
-            # Insère dans results si pas déjà présent
             fixture = session.fetch_one(
                 "SELECT id FROM fixtures WHERE external_id = %s AND sport = %s",
                 (r.external_id, r.sport),
@@ -83,8 +93,20 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
                 """,
                 (fixture["id"], r.home_score, r.away_score, outcome),
             )
+            n_nouveaux_résultats += 1
+            log.info(
+                "ingest.résultat_enregistré",
+                match=f"{r.home_team_name} vs {r.away_team_name}",
+                score=f"{r.home_score}-{r.away_score}",
+                issue=outcome,
+            )
         n_results = len(results)
-        log.info("ingest.results_done", sport=sport, count=n_results)
+        log.info(
+            "ingest.résultats_récents",
+            sport=sport,
+            résultats_API=n_results,
+            nouveaux_en_base=n_nouveaux_résultats,
+        )
 
     except Exception as exc:
         import httpx
