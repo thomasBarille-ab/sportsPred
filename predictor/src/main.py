@@ -16,6 +16,7 @@ import structlog
 
 from .config import Settings, load_settings
 from .db import session
+from .log_capture import capture_processor
 
 
 def _configure_logging(level: str) -> None:
@@ -24,6 +25,7 @@ def _configure_logging(level: str) -> None:
             structlog.stdlib.add_log_level,
             structlog.stdlib.add_logger_name,
             structlog.processors.TimeStamper(fmt="iso"),
+            capture_processor,
             structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,

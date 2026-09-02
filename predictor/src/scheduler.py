@@ -10,6 +10,7 @@ Planification UTC :
 
 from __future__ import annotations
 
+import json
 import traceback
 from datetime import datetime
 
@@ -22,13 +23,14 @@ from .db import session
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .jobs import evaluate, ingest, predict, retrain
+from .log_capture import capture_steps
 from .summaries.ollama import generate_summary
 
 log = structlog.get_logger()
 
 
 def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
-    """Wrapper qui log chaque job dans agent_logs."""
+    """Wrapper qui log chaque job dans agent_logs et capture les étapes détaillées."""
     started = datetime.utcnow()
     log_id = session.execute_returning(
         """
@@ -37,38 +39,41 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
         """,
         (job_name, sport, started),
     )
-    try:
-        result = fn(*args, **kwargs)
-        finished = datetime.utcnow()
-        duration = (finished - started).total_seconds()
-        records = None
-        if isinstance(result, dict):
-            records = result.get("upcoming") or result.get("n_scored") or result.get("n_predicted")
-        elif isinstance(result, int):
-            records = result
+    with capture_steps() as steps:
+        try:
+            result = fn(*args, **kwargs)
+            finished = datetime.utcnow()
+            duration = (finished - started).total_seconds()
+            records = None
+            if isinstance(result, dict):
+                records = result.get("upcoming") or result.get("n_scored") or result.get("n_predicted")
+            elif isinstance(result, int):
+                records = result
 
-        session.execute(
-            """
-            UPDATE agent_logs
-            SET status = 'success', finished_at = %s, duration_seconds = %s, records_processed = %s
-            WHERE id = %s
-            """,
-            (finished, duration, records, log_id),
-        )
-        log.info("job.success", job=job_name, sport=sport, duration=round(duration, 1))
-    except Exception as exc:
-        finished = datetime.utcnow()
-        duration = (finished - started).total_seconds()
-        err = traceback.format_exc()
-        session.execute(
-            """
-            UPDATE agent_logs
-            SET status = 'failed', finished_at = %s, duration_seconds = %s, error_message = %s
-            WHERE id = %s
-            """,
-            (finished, duration, err[:4000], log_id),
-        )
-        log.error("job.failed", job=job_name, sport=sport, error=str(exc))
+            session.execute(
+                """
+                UPDATE agent_logs
+                SET status = 'success', finished_at = %s, duration_seconds = %s,
+                    records_processed = %s, details = %s
+                WHERE id = %s
+                """,
+                (finished, duration, records, json.dumps({"steps": steps}), log_id),
+            )
+            log.info("job.success", job=job_name, sport=sport, duration=round(duration, 1))
+        except Exception as exc:
+            finished = datetime.utcnow()
+            duration = (finished - started).total_seconds()
+            err = traceback.format_exc()
+            session.execute(
+                """
+                UPDATE agent_logs
+                SET status = 'failed', finished_at = %s, duration_seconds = %s,
+                    error_message = %s, details = %s
+                WHERE id = %s
+                """,
+                (finished, duration, err[:4000], json.dumps({"steps": steps}), log_id),
+            )
+            log.error("job.failed", job=job_name, sport=sport, error=str(exc))
 
 
 def _build_metrics_snapshot() -> dict:

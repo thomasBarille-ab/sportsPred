@@ -107,7 +107,7 @@ export async function getModelVersions(sport: string) {
 export async function getAgentLogs(limit = 50) {
   return sql`
     SELECT id, job_name, sport, started_at, finished_at,
-           status, duration_seconds, records_processed, error_message
+           status, duration_seconds, records_processed, error_message, details
     FROM agent_logs
     ORDER BY started_at DESC
     LIMIT ${limit}
