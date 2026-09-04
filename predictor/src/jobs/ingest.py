@@ -96,7 +96,7 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
             n_nouveaux_résultats += 1
             log.info(
                 "ingest.résultat_enregistré",
-                match=f"{r.home_team_name} vs {r.away_team_name}",
+                external_id=r.external_id,
                 score=f"{r.home_score}-{r.away_score}",
                 issue=outcome,
             )
