@@ -163,7 +163,7 @@ def start_scheduler(cfg: Settings) -> None:
     )
 
     from .trigger_server import start_trigger_server
-    start_trigger_server(scheduler)
+    start_trigger_server(scheduler, cfg)
 
     log.info("scheduler.started", jobs=[j.id for j in scheduler.get_jobs()])
     scheduler.start()

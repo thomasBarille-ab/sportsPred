@@ -6,6 +6,7 @@ const links = [
   { href: "/nba",     label: "NBA" },
   { href: "/models",  label: "Modèles" },
   { href: "/logs",    label: "Logs" },
+  { href: "/chat",    label: "Agent" },
 ];
 
 export default function Nav() {
