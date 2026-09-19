@@ -77,22 +77,31 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
 
 
 def _build_metrics_snapshot() -> dict:
-    """Agrège les métriques des 7 derniers jours pour le résumé Ollama."""
+    """Agrège les métriques des 7 derniers jours pour le résumé Ollama.
+
+    Omet les sports sans prédiction évaluée (pas de conversion None → 0).
+    """
     rows = session.fetch_all(
         """
         SELECT f.sport,
-               COUNT(*) FILTER (WHERE ps.id IS NOT NULL)  AS n_predictions,
-               AVG(ps.brier_score)                         AS avg_brier,
-               AVG(ps.log_loss)                            AS avg_logloss,
-               AVG(ps.is_correct::int::float)              AS accuracy
+               COUNT(ps.id)                          AS n_predictions,
+               AVG(ps.brier_score)                   AS avg_brier,
+               AVG(ps.log_loss)                      AS avg_logloss,
+               AVG(ps.is_correct::int::float)         AS accuracy
         FROM fixtures f
-        JOIN predictions p ON p.fixture_id = f.id
-        LEFT JOIN prediction_scores ps ON ps.prediction_id = p.id
+        JOIN predictions p  ON p.fixture_id = f.id
+        JOIN prediction_scores ps ON ps.prediction_id = p.id
         WHERE f.match_date >= NOW() - INTERVAL '7 days'
         GROUP BY f.sport
+        HAVING COUNT(ps.id) > 0
         """,
     )
-    return {r["sport"]: {k: (float(v) if v is not None else 0) for k, v in r.items() if k != "sport"} for r in rows}
+    result = {}
+    for r in rows:
+        result[r["sport"]] = {
+            k: float(v) for k, v in r.items() if k != "sport" and v is not None
+        }
+    return result
 
 
 def _job_ingest(cfg: Settings) -> None:
@@ -114,7 +123,17 @@ def _job_evaluate() -> None:
 
 def _job_summary(cfg: Settings) -> None:
     metrics = _build_metrics_snapshot()
-    text = generate_summary(cfg.ollama_url, cfg.ollama_model, metrics)
+    try:
+        text = generate_summary(cfg.ollama_url, cfg.ollama_model, metrics)
+    except Exception as exc:
+        log.error("summary.generate_failed", error=str(exc))
+        return
+
+    # Ne sauvegarde pas si Ollama a retourné un message d'erreur
+    if text.startswith("["):
+        log.warning("summary.ollama_error_response", text=text[:120])
+        return
+
     from datetime import date
     import json
     session.execute(

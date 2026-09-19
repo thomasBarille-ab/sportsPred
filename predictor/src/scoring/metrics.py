@@ -8,6 +8,14 @@ from typing import Literal
 
 Outcome = Literal["home", "draw", "away"]
 
+# Baseline Brier pour un modèle uniforme (référence pour l'évaluation)
+# Ligue 1 : somme des carrés sur 3 classes → (1/3 - 1)² + (1/3)² + (1/3)² = 2/3
+# NBA     : (0.5 - 1)² = 0.25
+BRIER_BASELINE: dict[str, float] = {
+    "ligue1": 2 / 3,
+    "nba": 0.25,
+}
+
 
 def outcome_from_scores(home_score: int, away_score: int, sport: str) -> Outcome:
     if home_score > away_score:
@@ -27,16 +35,17 @@ def brier_score(
     actual: Outcome,
     sport: str,
 ) -> float:
-    """Brier score multi-classe (normalisé entre 0 et 1).
+    """Brier score multi-classe (somme des carrés sur toutes les classes).
 
-    Plus bas = meilleur. Modèle parfait = 0, aléatoire uniforme ≈ 0.67.
+    Plus bas = meilleur. Parfait = 0.
+    Ligue 1 uniforme = 2/3 ≈ 0.6667, NBA uniforme = 0.25.
     """
     if sport == "ligue1":
         o_home = 1.0 if actual == "home" else 0.0
         o_draw = 1.0 if actual == "draw" else 0.0
         o_away = 1.0 if actual == "away" else 0.0
         pd = prob_draw or 0.0
-        return ((prob_home - o_home) ** 2 + (pd - o_draw) ** 2 + (prob_away - o_away) ** 2) / 2
+        return (prob_home - o_home) ** 2 + (pd - o_draw) ** 2 + (prob_away - o_away) ** 2
     else:
         o_home = 1.0 if actual == "home" else 0.0
         return (prob_home - o_home) ** 2

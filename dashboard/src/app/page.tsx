@@ -41,7 +41,7 @@ export default async function Home() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Prédictions scorées" value={String(l1?.total ?? 0)} />
           <StatCard label="Accuracy" value={`${((Number(l1?.accuracy) || 0) * 100).toFixed(1)}%`} />
-          <StatCard label="Brier score moyen" value={l1?.avgBrier ?? "—"} sub="↓ meilleur" />
+          <StatCard label="Brier score moyen" value={l1?.avgBrier ?? "—"} sub="↓ meilleur · baseline 0.667" />
           <StatCard label="Log-loss moyen" value={l1?.avgLogloss ?? "—"} sub="↓ meilleur" />
         </div>
       </section>
@@ -51,7 +51,7 @@ export default async function Home() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Prédictions scorées" value={String(nba?.total ?? 0)} />
           <StatCard label="Accuracy" value={`${((Number(nba?.accuracy) || 0) * 100).toFixed(1)}%`} />
-          <StatCard label="Brier score moyen" value={nba?.avgBrier ?? "—"} sub="↓ meilleur" />
+          <StatCard label="Brier score moyen" value={nba?.avgBrier ?? "—"} sub="↓ meilleur · baseline 0.25" />
           <StatCard label="Log-loss moyen" value={nba?.avgLogloss ?? "—"} sub="↓ meilleur" />
         </div>
       </section>

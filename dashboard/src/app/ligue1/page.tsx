@@ -41,6 +41,11 @@ export default async function Ligue1Page() {
         <AccuracyChart data={accuracy as any[]} />
       </div>
 
+      <p className="text-xs text-muted -mt-4">
+        Brier score Ligue 1 : somme des carrés sur 3 classes (home/nul/away).
+        Baseline modèle aléatoire = <strong>0.667</strong>. Meilleur = plus proche de 0.
+      </p>
+
       <div className="card">
         <h2 className="text-base font-semibold mb-1">Courbe de calibration — victoire domicile</h2>
         <p className="text-xs text-muted mb-4">
