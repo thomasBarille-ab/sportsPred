@@ -14,9 +14,22 @@ class Settings:
     retrain_weekday: str   # "mon" | "tue" | ...
     retrain_hour_utc: int
     log_level: str
+    predict_horizon_hours: int  # horizon de prédiction en heures (défaut 36)
+    internal_api_token: str
+
+
+def _validate_hour(key: str, value: int) -> int:
+    if not (0 <= value <= 23):
+        raise RuntimeError(f"Env var {key!r} must be between 0 and 23, got {value}")
+    return value
 
 
 def load_settings() -> Settings:
+    ingestion_hour = int(os.environ.get("INGESTION_HOUR_UTC", "6"))
+    retrain_hour   = int(os.environ.get("RETRAIN_HOUR_UTC", "3"))
+    _validate_hour("INGESTION_HOUR_UTC", ingestion_hour)
+    _validate_hour("RETRAIN_HOUR_UTC", retrain_hour)
+
     return Settings(
         postgres_url=_require("POSTGRES_URL"),
         football_data_api_key=_require("FOOTBALL_DATA_API_KEY"),
@@ -24,10 +37,12 @@ def load_settings() -> Settings:
         ollama_url=os.environ.get("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
         model_storage_path=os.environ.get("MODEL_STORAGE_PATH", "/models"),
-        ingestion_hour_utc=int(os.environ.get("INGESTION_HOUR_UTC", "6")),
+        ingestion_hour_utc=ingestion_hour,
         retrain_weekday=os.environ.get("RETRAIN_WEEKDAY", "mon"),
-        retrain_hour_utc=int(os.environ.get("RETRAIN_HOUR_UTC", "3")),
+        retrain_hour_utc=retrain_hour,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        predict_horizon_hours=int(os.environ.get("PREDICT_HORIZON_HOURS", "36")),
+        internal_api_token=os.environ.get("INTERNAL_API_TOKEN", ""),
     )
 
 

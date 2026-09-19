@@ -2,20 +2,83 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
+import numpy as np
 import structlog
 
 from ..db import session
 from ..training.champion_challenger import (
     IMPROVEMENT_THRESHOLD,
+    MIN_HOLDOUT_SAMPLES,
     get_production_model,
     maybe_promote,
     register_model_version,
 )
-from ..training.trainer import TrainResult, train_model
+from ..training.trainer import (
+    HYPERPARAMS_LIGUE1,
+    HYPERPARAMS_NBA,
+    PIPELINE_VERSION,
+    TrainResult,
+    train_model,
+)
 
 log = structlog.get_logger()
+
+
+def _score_champion_on_holdout(
+    champion: dict,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    sport: str,
+) -> float | None:
+    """Score le champion sur le X_test du challenger.
+
+    Retourne None si le champion est legacy (pas de pipeline_version >= 2)
+    ou si les feature_names diffèrent.
+    """
+    import json
+    import joblib
+    from ..training.trainer import _compute_metrics
+
+    try:
+        artifact = joblib.load(champion["model_path"])
+    except Exception as exc:
+        log.warning("retrain.champion_load_failed", error=str(exc))
+        return None
+
+    # Vérifie la version du pipeline
+    if artifact.get("pipeline_version", 0) < 2:
+        log.info(
+            "retrain.champion_legacy",
+            sport=sport,
+            reason="pipeline_version < 2 — considéré comme legacy, promotion automatique du challenger",
+        )
+        return None
+
+    # Vérifie que les feature sets sont identiques
+    champ_features = artifact.get("feature_names", [])
+    challenger_features = HYPERPARAMS_LIGUE1 if sport == "ligue1" else HYPERPARAMS_NBA
+    champ_fn_set = set(champ_features)
+    from ..features.builder import LIGUE1_FEATURES, NBA_FEATURES
+    exp_features = LIGUE1_FEATURES if sport == "ligue1" else NBA_FEATURES
+    if champ_fn_set != set(exp_features):
+        log.info(
+            "retrain.feature_mismatch",
+            sport=sport,
+            reason="feature_names différents — champion considéré comme legacy",
+        )
+        return None
+
+    proba = artifact["model"].predict_proba(X_test)
+    brier, ll, _ = _compute_metrics(proba, y_test, sport)
+    log.info(
+        "retrain.champion_scored_on_challenger_holdout",
+        sport=sport,
+        champion_brier=round(brier, 5),
+        champion_logloss=round(ll, 5),
+    )
+    return brier
 
 
 def run_retrain(sport: str, model_storage_path: str) -> dict:
@@ -72,30 +135,38 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         holdout_accuracy=f"{result.holdout_accuracy:.1%}",
     )
 
-    # Comparaison avec le champion actuel
+    # ── Comparaison champion/challenger sur le MÊME holdout ──────────────────
     champion = get_production_model(sport)
+    champion_brier_on_same_holdout: float | None = None
+
     if champion:
-        delta = champion["holdout_brier"] - result.holdout_brier
-        log.info(
-            "retrain.comparaison_champion_challenger",
-            sport=sport,
-            champion_brier=round(champion["holdout_brier"], 5),
-            challenger_brier=round(result.holdout_brier, 5),
-            delta=f"{delta:+.5f}",
-            seuil=IMPROVEMENT_THRESHOLD,
-            verdict="challenger GAGNE" if delta >= IMPROVEMENT_THRESHOLD else f"champion conservé (delta {delta:.5f} < {IMPROVEMENT_THRESHOLD})",
+        champion_brier_on_same_holdout = _score_champion_on_holdout(
+            champion, result.X_test, result.y_test, sport
         )
+
+        if champion_brier_on_same_holdout is not None:
+            delta = champion_brier_on_same_holdout - result.holdout_brier
+            log.info(
+                "retrain.comparaison_champion_challenger",
+                sport=sport,
+                champion_brier=round(champion_brier_on_same_holdout, 5),
+                challenger_brier=round(result.holdout_brier, 5),
+                delta=f"{delta:+.5f}",
+                seuil=IMPROVEMENT_THRESHOLD,
+                verdict="challenger GAGNE" if delta >= IMPROVEMENT_THRESHOLD else f"champion conservé (delta {delta:.5f} < {IMPROVEMENT_THRESHOLD})",
+            )
+        else:
+            log.info("retrain.champion_legacy", sport=sport,
+                     note="Champion non comparable — promotion automatique du challenger")
     else:
         log.info("retrain.premier_modèle", sport=sport,
                  note="Aucun champion existant — promotion automatique")
 
-    version = datetime.utcnow().strftime("v%Y%m%d_%H%M")
+    version = datetime.now(timezone.utc).strftime("v%Y%m%d_%H%M%S")
+    model_path = result.model_path
 
-    import glob
-    import os
-    pattern = os.path.join(model_storage_path, sport, "model_*.joblib")
-    files = sorted(glob.glob(pattern))
-    model_path = files[-1] if files else ""
+    hyperparams = (HYPERPARAMS_LIGUE1 if sport == "ligue1" else HYPERPARAMS_NBA).copy()
+    hyperparams["pipeline_version"] = PIPELINE_VERSION
 
     version_id = register_model_version(
         sport=sport,
@@ -107,10 +178,23 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         holdout_logloss=result.holdout_logloss,
         holdout_accuracy=result.holdout_accuracy,
         feature_names=result.feature_names,
-        hyperparameters={"n_estimators": 400, "max_depth": 4, "learning_rate": 0.05},
+        hyperparameters=hyperparams,
     )
 
-    promoted = maybe_promote(sport, version_id, result.holdout_brier, result.holdout_samples)
+    # Si le champion est legacy → challenger promu automatiquement
+    effective_champion_brier = (
+        champion_brier_on_same_holdout
+        if champion_brier_on_same_holdout is not None and champion
+        else None
+    )
+
+    promoted = maybe_promote(
+        sport,
+        version_id,
+        result.holdout_brier,
+        result.holdout_samples,
+        champion_brier_override=effective_champion_brier,
+    )
 
     log.info(
         "retrain.terminé",

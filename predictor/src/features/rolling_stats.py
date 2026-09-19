@@ -44,13 +44,50 @@ def _team_games(team_id: str, matches: list[dict], before: datetime) -> list[dic
     return sorted(games, key=lambda x: x["match_date"], reverse=True)
 
 
+def days_since_last_scheduled_game(
+    team_id: str,
+    match_date: datetime,
+    schedule: list[dict],
+) -> float:
+    """Jours depuis le dernier match planifié (hors CANCELLED/POSTPONED) avant match_date.
+
+    `schedule` : toutes les fixtures avec au minimum home_team_id, away_team_id, match_date,
+    et optionnellement status. Utilisé pour calculer le repos réel depuis le calendrier.
+    """
+    candidates = [
+        m for m in schedule
+        if (m["home_team_id"] == team_id or m["away_team_id"] == team_id)
+        and m["match_date"] < match_date
+        and m.get("status") not in ("CANCELLED", "POSTPONED")
+    ]
+    if not candidates:
+        return 30.0
+    last = max(m["match_date"] for m in candidates)
+    return float((match_date - last).total_seconds() / 86400)
+
+
+def is_back2back_from_schedule(
+    team_id: str,
+    match_date: datetime,
+    schedule: list[dict],
+) -> float:
+    """1.0 si le dernier match planifié était il y a ≤ 36 h, sinon 0.0."""
+    days = days_since_last_scheduled_game(team_id, match_date, schedule)
+    return 1.0 if days <= 1.5 else 0.0
+
+
 def compute_rolling_stats(
     team_id: str,
     match_date: datetime,
     all_matches: list[dict],
     window: int = 10,
+    schedule: list[dict] | None = None,
 ) -> dict[str, float]:
-    """Statistiques glissantes sur `window` matchs avant `match_date`.
+    """Statistiques glissantes sur `window` matchs terminés avant `match_date`.
+
+    `schedule` : si fourni, utilisé pour is_back2back et days_since à la place de
+    all_matches (permet d'inclure les matchs planifiés non encore joués).
+    Par défaut, all_matches est utilisé pour les deux (comportement inchangé).
 
     Retourne un dict de features avec des valeurs par défaut neutres si
     pas assez de données.
@@ -63,13 +100,15 @@ def compute_rolling_stats(
         "n_games": 0.0,
     }
 
+    # La forme (ppg, win_rate) est toujours calculée depuis les matchs TERMINÉS
     games = _team_games(team_id, all_matches, before=match_date)
-    if not games:
-        return defaults
 
-    # Back-to-back : le match précédent était hier ou avant-hier
-    last_game_date = games[0]["match_date"]
-    is_b2b = 1.0 if (match_date - last_game_date) <= timedelta(days=1, hours=12) else 0.0
+    # Le B2B et le repos se calculent depuis le calendrier complet si fourni
+    cal = schedule if schedule is not None else all_matches
+    is_b2b = is_back2back_from_schedule(team_id, match_date, cal)
+
+    if not games:
+        return {**defaults, "is_back2back": is_b2b}
 
     recent = games[:window]
     n = len(recent)

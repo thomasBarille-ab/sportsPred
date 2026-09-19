@@ -18,7 +18,7 @@ from ..db import session
 log = structlog.get_logger()
 
 IMPROVEMENT_THRESHOLD = 0.002  # amélioration minimum du Brier score pour la promotion
-MIN_HOLDOUT_SAMPLES   = 10
+MIN_HOLDOUT_SAMPLES   = 50
 
 
 def get_production_model(sport: str) -> dict | None:
@@ -61,8 +61,18 @@ def register_model_version(
     )
 
 
-def maybe_promote(sport: str, new_version_id: int, new_brier: float, holdout_samples: int) -> bool:
+def maybe_promote(
+    sport: str,
+    new_version_id: int,
+    new_brier: float,
+    holdout_samples: int,
+    champion_brier_override: float | None = None,
+) -> bool:
     """Promeut new_version_id si il bat le champion actuel.
+
+    `champion_brier_override` : Brier du champion scoré sur le MÊME holdout que
+    le challenger (fourni par retrain.py). Si None, utilise le brier stocké en DB
+    (moins fiable — holdouts potentiellement différents).
 
     Retourne True si promu, False sinon.
     """
@@ -82,7 +92,14 @@ def maybe_promote(sport: str, new_version_id: int, new_brier: float, holdout_sam
         log.info("champion_challenger.first_model_promoted", sport=sport, version_id=new_version_id)
         return True
 
-    champion_brier = champion["holdout_brier"]
+    # Utilise le Brier apparié si disponible, sinon celui stocké en DB
+    if champion_brier_override is not None:
+        champion_brier = champion_brier_override
+        brier_source = "holdout_apparié"
+    else:
+        champion_brier = champion["holdout_brier"]
+        brier_source = "holdout_db"
+
     delta = champion_brier - new_brier
 
     log.info(
@@ -93,6 +110,7 @@ def maybe_promote(sport: str, new_version_id: int, new_brier: float, holdout_sam
         challenger_brier=round(new_brier, 5),
         delta=round(delta, 5),
         threshold=IMPROVEMENT_THRESHOLD,
+        brier_source=brier_source,
     )
 
     if delta >= IMPROVEMENT_THRESHOLD:

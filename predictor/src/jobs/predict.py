@@ -17,12 +17,14 @@ from ..features.elo import build_elo_state, compute_elo_ratings
 
 log = structlog.get_logger()
 
+_DEFAULT_HORIZON_HOURS = 36
+
 
 def _get_all_matches_for_sport(sport: str) -> list[dict]:
     return session.fetch_all(
         """
         SELECT f.home_team_id, f.away_team_id, f.match_date,
-               f.home_score, f.away_score
+               f.home_score, f.away_score, f.status
         FROM fixtures f
         WHERE f.sport = %s
         ORDER BY f.match_date
@@ -31,7 +33,7 @@ def _get_all_matches_for_sport(sport: str) -> list[dict]:
     )
 
 
-def run_predict(sport: str) -> int:
+def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS) -> int:
     """Génère les prédictions pour tous les matchs futurs sans prédiction."""
     prod_model = session.fetch_one(
         "SELECT * FROM model_versions WHERE sport = %s AND is_production = TRUE LIMIT 1",
@@ -55,20 +57,23 @@ def run_predict(sport: str) -> int:
     model         = artifact["model"]
     feature_names = artifact["feature_names"]
     dc_model      = artifact.get("dc_model")
-    elo_state     = artifact.get("elo")
 
-    if elo_state is None:
-        log.info("predict.elo_rebuild", sport=sport,
-                 reason="Elo absent de l'artefact — recalcul depuis l'historique complet")
-        all_matches = _get_all_matches_for_sport(sport)
-        ratings = compute_elo_ratings(all_matches, sport)
-        elo_state = build_elo_state(sport)
-        elo_state.ratings = ratings
-    else:
-        all_matches = _get_all_matches_for_sport(sport)
+    # Charge tous les matchs UNE seule fois
+    all_matches = _get_all_matches_for_sport(sport)
+
+    # Recalcule l'Elo depuis TOUS les matchs terminés (ne réutilise plus artifact["elo"])
+    finished_matches = [m for m in all_matches if m.get("home_score") is not None]
+    ratings = compute_elo_ratings(finished_matches, sport)
+    elo_state = build_elo_state(sport)
+    elo_state.ratings = ratings
+
+    log.info("predict.elo_recalculated", sport=sport, n_matches=len(finished_matches))
+
+    # Calendrier complet (hors CANCELLED/POSTPONED) pour le calcul du repos
+    schedule = [m for m in all_matches if m.get("status") not in ("CANCELLED", "POSTPONED")]
 
     now     = datetime.now(timezone.utc)
-    horizon = now + timedelta(days=7)
+    horizon = now + timedelta(hours=horizon_hours)
 
     unpredicted = session.fetch_all(
         """
@@ -89,7 +94,7 @@ def run_predict(sport: str) -> int:
         "predict.fixtures_queued",
         sport=sport,
         count=len(unpredicted),
-        window="J+0 à J+7",
+        horizon_hours=horizon_hours,
     )
 
     if not unpredicted:
@@ -98,7 +103,8 @@ def run_predict(sport: str) -> int:
         return 0
 
     n_predicted = 0
-    all_matches_list = _get_all_matches_for_sport(sport)
+    # Utilise uniquement les matchs terminés comme historique pour les features
+    finished_list = [m for m in all_matches if m.get("home_score") is not None]
 
     for fixture in unpredicted:
         try:
@@ -109,14 +115,16 @@ def run_predict(sport: str) -> int:
             if sport == "ligue1":
                 vec, _ = build_features_ligue1(
                     fixture["home_team_id"], fixture["away_team_id"],
-                    match_date, all_matches_list,
+                    match_date, finished_list,
                     elo_state, dc_model,
+                    schedule=schedule,
                 )
             else:
                 vec, _ = build_features_nba(
                     fixture["home_team_id"], fixture["away_team_id"],
-                    match_date, all_matches_list,
+                    match_date, finished_list,
                     elo_state,
+                    schedule=schedule,
                 )
 
             X     = np.array([vec])

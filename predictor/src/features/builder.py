@@ -26,7 +26,11 @@ import numpy as np
 
 from .dixon_coles import DCModel
 from .elo import EloState
-from .rolling_stats import compute_h2h_stats, compute_rolling_stats
+from .rolling_stats import (
+    compute_h2h_stats,
+    compute_rolling_stats,
+    days_since_last_scheduled_game,
+)
 
 # Feature names dans l'ordre exact attendu par XGBoost
 LIGUE1_FEATURES = [
@@ -49,8 +53,19 @@ NBA_FEATURES = [
 
 
 def _days_since_last_game(
-    team_id: str, match_date: datetime, all_matches: list[dict]
+    team_id: str,
+    match_date: datetime,
+    all_matches: list[dict],
+    schedule: list[dict] | None = None,
 ) -> float:
+    """Jours depuis le dernier match.
+
+    Si `schedule` est fourni, utilise le calendrier complet (hors CANCELLED/POSTPONED)
+    pour refléter le vrai repos — y compris les matchs planifiés non encore joués.
+    Sinon, ne considère que les matchs terminés (comportement original).
+    """
+    if schedule is not None:
+        return days_since_last_scheduled_game(team_id, match_date, schedule)
     games = [
         m for m in all_matches
         if (m["home_team_id"] == team_id or m["away_team_id"] == team_id)
@@ -58,7 +73,7 @@ def _days_since_last_game(
         and m.get("home_score") is not None
     ]
     if not games:
-        return 30.0  # valeur neutre si pas d'historique
+        return 30.0
     last = max(m["match_date"] for m in games)
     return float((match_date - last).days)
 
@@ -96,8 +111,13 @@ def build_features_ligue1(
     all_matches: list[dict],
     elo_state: EloState,
     dc_model: DCModel,
+    schedule: list[dict] | None = None,
 ) -> tuple[list[float], list[str]]:
-    """Retourne (feature_vector, feature_names)."""
+    """Retourne (feature_vector, feature_names).
+
+    `schedule` : calendrier complet (fixtures planifiées, hors CANCELLED/POSTPONED)
+    pour le calcul du repos. Par défaut utilise all_matches (matchs terminés seulement).
+    """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
 
@@ -111,8 +131,8 @@ def build_features_ligue1(
     a_ppg, a_con, a_pts = _rolling_pts_last5(away_team_id, match_date, all_matches)
     h2h = compute_h2h_stats(home_team_id, away_team_id, match_date, all_matches, window=5)
 
-    days_h = _days_since_last_game(home_team_id, match_date, all_matches)
-    days_a = _days_since_last_game(away_team_id, match_date, all_matches)
+    days_h = _days_since_last_game(home_team_id, match_date, all_matches, schedule)
+    days_a = _days_since_last_game(away_team_id, match_date, all_matches, schedule)
 
     vec = [
         elo_h, elo_a, elo_h - elo_a,
@@ -132,15 +152,21 @@ def build_features_nba(
     match_date: datetime,
     all_matches: list[dict],
     elo_state: EloState,
+    schedule: list[dict] | None = None,
 ) -> tuple[list[float], list[str]]:
+    """Retourne (feature_vector, feature_names).
+
+    `schedule` : calendrier complet pour le calcul du repos/B2B.
+    Par défaut utilise all_matches.
+    """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
 
-    h_stats = compute_rolling_stats(home_team_id, match_date, all_matches, window=10)
-    a_stats = compute_rolling_stats(away_team_id, match_date, all_matches, window=10)
+    h_stats = compute_rolling_stats(home_team_id, match_date, all_matches, window=10, schedule=schedule)
+    a_stats = compute_rolling_stats(away_team_id, match_date, all_matches, window=10, schedule=schedule)
     h2h = compute_h2h_stats(home_team_id, away_team_id, match_date, all_matches, window=5)
-    days_h = _days_since_last_game(home_team_id, match_date, all_matches)
-    days_a = _days_since_last_game(away_team_id, match_date, all_matches)
+    days_h = _days_since_last_game(home_team_id, match_date, all_matches, schedule)
+    days_a = _days_since_last_game(away_team_id, match_date, all_matches, schedule)
 
     vec = [
         elo_h, elo_a, elo_h - elo_a,

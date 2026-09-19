@@ -102,9 +102,9 @@ def _job_ingest(cfg: Settings) -> None:
     _log_job("ingest", "nba",    ingest.run_ingest, bdl, "nba")
 
 
-def _job_predict() -> None:
+def _job_predict(cfg: Settings) -> None:
     for sport in ("ligue1", "nba"):
-        _log_job("predict", sport, predict.run_predict, sport)
+        _log_job("predict", sport, predict.run_predict, sport, cfg.predict_horizon_hours)
 
 
 def _job_evaluate() -> None:
@@ -136,30 +136,36 @@ def _job_retrain(cfg: Settings) -> None:
 def start_scheduler(cfg: Settings) -> None:
     scheduler = BlockingScheduler(timezone="UTC")
 
+    h = cfg.ingestion_hour_utc
     scheduler.add_job(
         lambda: _job_ingest(cfg),
-        CronTrigger(hour=cfg.ingestion_hour_utc, minute=0),
+        CronTrigger(hour=h % 24, minute=0),
         id="ingest", name="Ingestion Ligue1 + NBA",
+        max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        _job_predict,
-        CronTrigger(hour=cfg.ingestion_hour_utc + 1, minute=0),
+        lambda: _job_predict(cfg),
+        CronTrigger(hour=(h + 1) % 24, minute=0),
         id="predict", name="Génération prédictions",
+        max_instances=1, coalesce=True,
     )
     scheduler.add_job(
         _job_evaluate,
-        CronTrigger(hour=cfg.ingestion_hour_utc + 2, minute=0),
+        CronTrigger(hour=(h + 2) % 24, minute=0),
         id="evaluate", name="Évaluation prédictions",
+        max_instances=1, coalesce=True,
     )
     scheduler.add_job(
         lambda: _job_summary(cfg),
-        CronTrigger(hour=cfg.ingestion_hour_utc + 3, minute=0),
+        CronTrigger(hour=(h + 3) % 24, minute=0),
         id="summary", name="Résumé Ollama",
+        max_instances=1, coalesce=True,
     )
     scheduler.add_job(
         lambda: _job_retrain(cfg),
         CronTrigger(day_of_week=cfg.retrain_weekday, hour=cfg.retrain_hour_utc, minute=0),
         id="retrain", name="Réentraînement modèles",
+        max_instances=1, coalesce=True,
     )
 
     from .trigger_server import start_trigger_server
