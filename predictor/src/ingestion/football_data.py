@@ -83,7 +83,7 @@ class FootballDataProvider(DataProvider):
         data = self._get(
             f"/competitions/{_COMPETITION}/matches",
             params={
-                "status": "SCHEDULED,TIMED",
+                "status": "SCHEDULED,TIMED,POSTPONED,SUSPENDED",
                 "dateFrom": from_date.isoformat(),
                 "dateTo": to_date.isoformat(),
             },

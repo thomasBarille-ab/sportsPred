@@ -78,7 +78,7 @@ def run_predict(sport: str) -> int:
         LEFT JOIN predictions p ON p.fixture_id = f.id
         WHERE f.sport = %s
           AND f.match_date BETWEEN %s AND %s
-          AND f.status NOT IN ('FINISHED', 'CANCELLED')
+          AND f.status IN ('SCHEDULED', 'TIMED')
           AND p.id IS NULL
         ORDER BY f.match_date
         """,

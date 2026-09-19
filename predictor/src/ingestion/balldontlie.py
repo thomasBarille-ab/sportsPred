@@ -81,9 +81,11 @@ class BallDontLieProvider(DataProvider):
 
         home = g.get("home_team", {})
         away = g.get("visitor_team", {})
-        home_score = g.get("home_team_score")
-        away_score = g.get("visitor_team_score")
-        status = "FINISHED" if (home_score is not None and home_score > 0) else "SCHEDULED"
+        raw_home_score = g.get("home_team_score")
+        raw_away_score = g.get("visitor_team_score")
+        # "Final" est la valeur exacte du champ status dans l'API balldontlie v1
+        is_final = g.get("status") == "Final"
+        status = "FINISHED" if is_final else "SCHEDULED"
 
         return FixtureDTO(
             external_id=str(g["id"]),
@@ -96,8 +98,8 @@ class BallDontLieProvider(DataProvider):
             season=str(g.get("season", _season_from_date(dt))),
             competition="NBA",
             status=status,
-            home_score=int(home_score) if home_score else None,
-            away_score=int(away_score) if away_score else None,
+            home_score=int(raw_home_score) if is_final and raw_home_score is not None else None,
+            away_score=int(raw_away_score) if is_final and raw_away_score is not None else None,
         )
 
     def _date_range_games(self, from_date: date, to_date: date, batch_size: int = 5) -> list[dict]:
@@ -133,17 +135,19 @@ class BallDontLieProvider(DataProvider):
         games = self._date_range_games(from_date, to_date)
         results: list[ResultDTO] = []
         for g in games:
+            if g.get("status") != "Final":
+                continue
             hs = g.get("home_team_score")
             as_ = g.get("visitor_team_score")
-            if hs is None or as_ is None or hs == 0:
+            if hs is None or as_ is None:
                 continue
             results.append(ResultDTO(
-                    external_id=str(g["id"]),
-                    sport=_SPORT,
-                    home_score=int(hs),
-                    away_score=int(as_),
-                    status="FINISHED",
-                ))
+                external_id=str(g["id"]),
+                sport=_SPORT,
+                home_score=int(hs),
+                away_score=int(as_),
+                status="FINISHED",
+            ))
         return results
 
     def fetch_season_fixtures(self, season: str) -> list[FixtureDTO]:

@@ -84,10 +84,8 @@ def compute_rolling_stats(
         allowed = m["away_score"] if is_home else m["home_score"]
         pts_scored.append(scored)
         pts_allowed.append(allowed)
-        w = _outcome(team_id if is_home else m["away_team_id"], m)
-        if not is_home:
-            # flip
-            w = 1.0 - w if w is not None else None
+        # _outcome gère déjà le point de vue de team_id (home ou away)
+        w = _outcome(team_id, m)
         wins.append(w if w is not None else 0.5)
 
     return {

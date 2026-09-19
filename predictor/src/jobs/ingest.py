@@ -27,6 +27,7 @@ def _upsert_fixture(fx: FixtureDTO) -> None:
           status      = EXCLUDED.status,
           home_score  = EXCLUDED.home_score,
           away_score  = EXCLUDED.away_score,
+          match_date  = EXCLUDED.match_date,
           updated_at  = NOW()
         """,
         (

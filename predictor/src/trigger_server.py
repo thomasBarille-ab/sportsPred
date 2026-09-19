@@ -127,7 +127,7 @@ def _build_context() -> str:
         WHERE p.id IS NULL
           AND f.match_date >= NOW()
           AND f.match_date <= NOW() + INTERVAL '7 days'
-          AND f.status NOT IN ('FINISHED','CANCELLED')
+          AND f.status IN ('SCHEDULED','TIMED')
         ORDER BY f.match_date
         LIMIT 5
         """
