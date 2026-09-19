@@ -111,10 +111,10 @@ services:
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
     networks:
       - sports-net
-    expose:
-      - "3000"
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
     # Cloudflared : créer un tunnel nommé "sports-dashboard" pointant sur ce container
-    # Pas besoin de ports: exposés publiquement ici — cloudflared gère l'accès
+    # En prod, remplacer ports: par expose: et laisser cloudflared gérer l'accès
 
 volumes:
   postgres_sports_data:

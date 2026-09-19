@@ -22,15 +22,15 @@ function getJwks() {
  * Retourne null si l'accès est autorisé, ou une NextResponse d'erreur.
  *
  * Comportement :
- *   - AUTH_DISABLED=true en dev : toujours autorisé (ne pas utiliser en prod)
- *   - Variables CF_* absentes en production : 503
+ *   - AUTH_DISABLED=true : toujours autorisé (à n'utiliser qu'en local)
+ *   - Variables CF_* absentes : 503
  *   - JWT invalide : 401
  */
 export async function requireAccess(
   req: NextRequest
 ): Promise<NextResponse | null> {
-  // Dev local sans auth
-  if (AUTH_DISABLED && !IS_PRODUCTION) {
+  // Court-circuit explicite (local ou CI sans CF Access)
+  if (AUTH_DISABLED) {
     return null;
   }
 
