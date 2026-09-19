@@ -17,15 +17,18 @@ const ACTION_LABELS: Record<string, string> = {
   predict:  "Prédiction déclenchée",
   evaluate: "Évaluation déclenchée",
   retrain:  "Réentraînement déclenché",
+  summary:  "Résumé généré",
 };
 
 const SUGGESTIONS = [
   "Quelles sont les performances actuelles du modèle Ligue 1 ?",
-  "Quelle est la prochaine prédiction pour la Ligue 1 ?",
-  "Lance l'ingestion des données",
   "Explique pourquoi le modèle est calibré ou pas",
-  "Génère les prédictions pour les matchs à venir",
   "Quels sont les derniers matchs évalués ?",
+  "/ingest — récupérer les données récentes",
+  "/predict — générer les prédictions",
+  "/evaluate — scorer les prédictions",
+  "/retrain — réentraîner les modèles",
+  "/summary — générer le résumé",
 ];
 
 export default function ChatPage() {
@@ -33,7 +36,7 @@ export default function ChatPage() {
     {
       role: "assistant",
       content:
-        "Bonjour ! Je suis l'agent de prédiction sportive. Je peux vous renseigner sur les performances des modèles, les prédictions en cours, ou déclencher des jobs (ingestion, prédiction, évaluation, réentraînement). Que puis-je faire pour vous ?",
+        "Bonjour ! Je suis l'agent de prédiction sportive. Je peux vous renseigner sur les performances des modèles et les prédictions en cours.\n\nPour déclencher un job, envoyez une commande exacte :\n  /ingest · /predict · /evaluate · /retrain · /summary",
     },
   ]);
   const [input, setInput] = useState("");

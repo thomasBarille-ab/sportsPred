@@ -129,8 +129,14 @@ def run_historical_ingest(provider: DataProvider, sport: str, seasons: list[str]
         try:
             fixtures = provider.fetch_season_fixtures(season)
         except Exception as exc:
-            # 403 = saison non accessible sur le tier actuel — on skip silencieusement
-            log.warning("ingest.historical_skip", sport=sport, season=season, reason=str(exc))
+            import httpx as _httpx
+            if isinstance(exc, _httpx.HTTPStatusError) and exc.response.status_code in (401, 403):
+                log.error("ingest.historical_auth_error", sport=sport, season=season,
+                          status=exc.response.status_code,
+                          hint="Vérifie la clé API dans les variables d'environnement")
+            else:
+                # 403 peut aussi signifier saison non accessible sur le tier actuel
+                log.warning("ingest.historical_skip", sport=sport, season=season, reason=str(exc))
             continue
         for fx in fixtures:
             _upsert_fixture(fx)

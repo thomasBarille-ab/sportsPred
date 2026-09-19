@@ -35,7 +35,7 @@ class FootballDataProvider(DataProvider):
         self._headers = {"X-Auth-Token": api_key}
         self._last_request_at: float = 0.0
 
-    def _get(self, path: str, params: dict | None = None) -> Any:
+    def _get(self, path: str, params: dict | None = None, _retries: int = 0) -> Any:
         elapsed = time.monotonic() - self._last_request_at
         if elapsed < _RATE_LIMIT_DELAY:
             time.sleep(_RATE_LIMIT_DELAY - elapsed)
@@ -46,9 +46,13 @@ class FootballDataProvider(DataProvider):
         self._last_request_at = time.monotonic()
 
         if resp.status_code == 429:
-            log.warning("football_data.rate_limited", retry_after=resp.headers.get("Retry-After", "60"))
-            time.sleep(61)
-            return self._get(path, params)
+            if _retries >= 2:
+                log.error("football_data.rate_limited_max_retries", retries=_retries + 1)
+                resp.raise_for_status()
+            retry_after = int(resp.headers.get("Retry-After", "61"))
+            log.warning("football_data.rate_limited", retry_after=retry_after, attempt=_retries + 1)
+            time.sleep(retry_after + 1)
+            return self._get(path, params, _retries=_retries + 1)
 
         resp.raise_for_status()
         return resp.json()

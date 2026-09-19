@@ -82,6 +82,7 @@ services:
       RETRAIN_WEEKDAY: ${RETRAIN_WEEKDAY:-mon}
       RETRAIN_HOUR_UTC: ${RETRAIN_HOUR_UTC:-3}
       PREDICT_HORIZON_HOURS: ${PREDICT_HORIZON_HOURS:-36}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PREDICTOR_URL: http://predictor:8080
     volumes:
@@ -104,6 +105,10 @@ services:
     environment:
       POSTGRES_URL: postgresql://sports:${POSTGRES_PASSWORD}@postgres-sports:5432/sports
       PREDICTOR_URL: http://predictor:8080
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
     networks:
       - sports-net
     expose:

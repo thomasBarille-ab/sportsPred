@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAccess } from "@/lib/auth";
 
 const PREDICTOR_URL = process.env.PREDICTOR_URL ?? "http://predictor:8080";
+const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN ?? "";
 
 const ALLOWED_JOBS = ["ingest", "predict", "evaluate", "retrain", "summary"];
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { job: string } }
 ) {
+  const authError = await requireAccess(req);
+  if (authError) return authError;
+
   const { job } = params;
 
   if (!ALLOWED_JOBS.includes(job)) {
@@ -17,6 +22,7 @@ export async function POST(
   try {
     const res = await fetch(`${PREDICTOR_URL}/run/${job}`, {
       method: "POST",
+      headers: { "X-Internal-Token": INTERNAL_TOKEN },
       signal: AbortSignal.timeout(5000),
     });
     const body = await res.json();
