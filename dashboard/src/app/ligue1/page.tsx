@@ -29,7 +29,7 @@ export default async function Ligue1Page() {
     getAccuracyOverTime("ligue1"),
     getCalibrationData("ligue1"),
     getRecentPredictions("ligue1", 25),
-    getMatchdaySummary("ligue1"),
+    getMatchdaySummary("ligue1").catch(() => []),
   ]);
 
   const now = new Date();

@@ -119,6 +119,9 @@ def main() -> None:
     log.info("predictor.starting")
     session.init_pool(cfg.postgres_url)
 
+    from .db.migrate import run_migrations
+    run_migrations()
+
     _bootstrap_if_empty(cfg)
     _maybe_retrain_if_no_model(cfg)
 
