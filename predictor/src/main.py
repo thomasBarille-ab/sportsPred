@@ -50,7 +50,9 @@ def _bootstrap_if_empty(cfg: Settings) -> None:
         log.info("bootstrap.ligue1.start")
         fd = FootballDataProvider(cfg.football_data_api_key)
         try:
-            run_historical_ingest(fd, "ligue1", ["2022", "2023", "2024"])
+            import datetime as _dt
+            _year = _dt.date.today().year
+            run_historical_ingest(fd, "ligue1", [str(y) for y in range(_year - 3, _year + 1)])
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (401, 403):
                 log.error(
@@ -79,6 +81,35 @@ def _bootstrap_if_empty(cfg: Settings) -> None:
                 raise
         else:
             log.info("bootstrap.nba.done")
+
+
+def _backfill_rounds_if_needed(cfg: Settings) -> None:
+    """Remplit la colonne round pour les fixtures ligue1 qui en sont dépourvues."""
+    import datetime
+    import httpx
+    from .ingestion.football_data import FootballDataProvider
+    from .jobs.ingest import run_historical_ingest
+
+    log = structlog.get_logger()
+
+    null_count = session.fetch_one(
+        "SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'ligue1' AND round IS NULL"
+    )
+    if not null_count or null_count["n"] == 0:
+        return
+
+    log.info("bootstrap.backfill_rounds.start", fixtures_sans_round=null_count["n"])
+    fd = FootballDataProvider(cfg.football_data_api_key)
+    try:
+        # Couvre les 4 dernières saisons + saison en cours
+        current_year = datetime.date.today().year
+        seasons = [str(y) for y in range(current_year - 3, current_year + 1)]
+        run_historical_ingest(fd, "ligue1", seasons)
+        log.info("bootstrap.backfill_rounds.done")
+    except httpx.HTTPStatusError as exc:
+        log.warning("bootstrap.backfill_rounds.error", status=exc.response.status_code)
+    except Exception as exc:
+        log.warning("bootstrap.backfill_rounds.error", error=str(exc))
 
 
 def _maybe_retrain_if_no_model(cfg: Settings) -> None:
@@ -123,6 +154,7 @@ def main() -> None:
     run_migrations()
 
     _bootstrap_if_empty(cfg)
+    _backfill_rounds_if_needed(cfg)
     _maybe_retrain_if_no_model(cfg)
 
     # Démarre le scheduler (bloquant — ne retourne jamais)
