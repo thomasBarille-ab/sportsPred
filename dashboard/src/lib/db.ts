@@ -114,6 +114,28 @@ export async function getAgentLogs(limit = 50) {
   `;
 }
 
+export async function getMatchdaySummary(sport: string) {
+  return sql`
+    SELECT
+      f.round                                               AS matchday,
+      MIN(f.match_date)                                     AS first_match,
+      MAX(f.match_date)                                     AS last_match,
+      COUNT(ps.id)                                          AS scored,
+      COUNT(p.id)                                           AS total,
+      SUM(ps.is_correct::int)                               AS correct,
+      ROUND(AVG(ps.is_correct::int::float)::numeric, 3)    AS accuracy,
+      ROUND(AVG(ps.brier_score)::numeric, 4)                AS avg_brier
+    FROM fixtures f
+    JOIN predictions p ON p.fixture_id = f.id
+    LEFT JOIN prediction_scores ps ON ps.fixture_id = f.id
+    WHERE f.sport = ${sport}
+      AND f.round IS NOT NULL
+    GROUP BY f.round
+    ORDER BY f.round DESC
+    LIMIT 38
+  `;
+}
+
 export async function getLatestSummary() {
   const rows = await sql`
     SELECT content, summary_date, generated_at

@@ -2,6 +2,7 @@ import {
   getAccuracyOverTime,
   getCalibrationData,
   getRecentPredictions,
+  getMatchdaySummary,
 } from "@/lib/db";
 import AccuracyChart from "@/components/AccuracyChart";
 import CalibrationChart from "@/components/CalibrationChart";
@@ -24,10 +25,11 @@ const OUTCOME_STYLE: Record<string, string> = {
 };
 
 export default async function Ligue1Page() {
-  const [accuracy, calibration, recent] = await Promise.all([
+  const [accuracy, calibration, recent, matchdays] = await Promise.all([
     getAccuracyOverTime("ligue1"),
     getCalibrationData("ligue1"),
     getRecentPredictions("ligue1", 25),
+    getMatchdaySummary("ligue1"),
   ]);
 
   const now = new Date();
@@ -53,6 +55,80 @@ export default async function Ligue1Page() {
         </p>
         <CalibrationChart data={calibration as any[]} />
       </div>
+
+      {(matchdays as any[]).length > 0 && (
+        <div className="card">
+          <h2 className="text-base font-semibold mb-4">Résumé par journée</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted border-b border-border">
+                  <th className="text-left py-2 pr-6">Journée</th>
+                  <th className="text-left py-2 pr-6">Période</th>
+                  <th className="text-center py-2 pr-6">Prédits</th>
+                  <th className="text-center py-2 pr-6">Corrects</th>
+                  <th className="text-center py-2 pr-6">Accuracy</th>
+                  <th className="text-right py-2">Brier moy.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(matchdays as any[]).map((row, i) => {
+                  const accuracy = row.accuracy != null ? Number(row.accuracy) : null;
+                  const correct = Number(row.correct ?? 0);
+                  const scored = Number(row.scored ?? 0);
+                  const total = Number(row.total ?? 0);
+                  const firstDate = row.firstMatch ? new Date(row.firstMatch) : null;
+                  const lastDate = row.lastMatch ? new Date(row.lastMatch) : null;
+
+                  const accuracyStyle =
+                    accuracy == null
+                      ? "text-muted"
+                      : accuracy >= 0.6
+                      ? "text-emerald-400 font-semibold"
+                      : accuracy >= 0.4
+                      ? "text-yellow-400"
+                      : "text-red-400";
+
+                  const period =
+                    firstDate && lastDate
+                      ? firstDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) +
+                        (firstDate.getTime() !== lastDate.getTime()
+                          ? " – " + lastDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })
+                          : "")
+                      : "—";
+
+                  return (
+                    <tr
+                      key={i}
+                      className="border-b border-border/40 hover:bg-white/5 transition-colors"
+                    >
+                      <td className="py-2.5 pr-6 font-semibold">J{row.matchday}</td>
+                      <td className="py-2.5 pr-6 text-muted text-xs whitespace-nowrap">{period}</td>
+                      <td className="py-2.5 pr-6 text-center text-muted">{total}</td>
+                      <td className="py-2.5 pr-6 text-center">
+                        {scored > 0 ? (
+                          <span>
+                            {correct}{" "}
+                            <span className="text-muted text-xs">/ {scored}</span>
+                          </span>
+                        ) : (
+                          <span className="text-muted text-xs">—</span>
+                        )}
+                      </td>
+                      <td className={`py-2.5 pr-6 text-center ${accuracyStyle}`}>
+                        {accuracy != null ? `${Math.round(accuracy * 100)} %` : "—"}
+                      </td>
+                      <td className="py-2.5 text-right text-muted text-xs font-mono tabular-nums">
+                        {row.avgBrier != null ? Number(row.avgBrier).toFixed(4) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="text-base font-semibold mb-4">Prédictions récentes</h2>

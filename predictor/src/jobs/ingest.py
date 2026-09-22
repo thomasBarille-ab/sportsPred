@@ -21,13 +21,14 @@ def _upsert_fixture(fx: FixtureDTO) -> None:
         INSERT INTO fixtures
           (external_id, sport, home_team_id, home_team_name,
            away_team_id, away_team_name, match_date, season,
-           competition, status, home_score, away_score)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           competition, status, home_score, away_score, round)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (external_id, sport) DO UPDATE SET
           status      = EXCLUDED.status,
           home_score  = EXCLUDED.home_score,
           away_score  = EXCLUDED.away_score,
           match_date  = EXCLUDED.match_date,
+          round       = COALESCE(EXCLUDED.round, fixtures.round),
           updated_at  = NOW()
         """,
         (
@@ -37,6 +38,7 @@ def _upsert_fixture(fx: FixtureDTO) -> None:
             fx.match_date, fx.season,
             fx.competition, fx.status,
             fx.home_score, fx.away_score,
+            fx.round,
         ),
     )
 

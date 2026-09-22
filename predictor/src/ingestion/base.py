@@ -18,6 +18,7 @@ class FixtureDTO:
     status: str = "scheduled"
     home_score: Optional[int] = None
     away_score: Optional[int] = None
+    round: Optional[int] = None
 
 
 @dataclass

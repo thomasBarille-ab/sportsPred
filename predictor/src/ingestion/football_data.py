@@ -81,6 +81,7 @@ class FootballDataProvider(DataProvider):
             status=status,
             home_score=home_score,
             away_score=away_score,
+            round=m.get("matchday"),
         )
 
     def fetch_upcoming_fixtures(self, from_date: date, to_date: date) -> list[FixtureDTO]:
