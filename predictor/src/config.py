@@ -17,6 +17,7 @@ class Settings:
     predict_horizon_hours: int  # horizon de prédiction en heures (défaut 36)
     internal_api_token: str
     anthropic_api_key: str
+    odds_api_key: str
 
 
 def _validate_hour(key: str, value: int) -> int:
@@ -45,6 +46,7 @@ def load_settings() -> Settings:
         predict_horizon_hours=int(os.environ.get("PREDICT_HORIZON_HOURS", "36")),
         internal_api_token=os.environ.get("INTERNAL_API_TOKEN", ""),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        odds_api_key=os.environ.get("ODDS_API_KEY", ""),
     )
 
 

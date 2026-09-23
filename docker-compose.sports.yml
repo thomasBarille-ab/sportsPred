@@ -86,6 +86,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PREDICTOR_URL: http://predictor:8080
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
     volumes:
       - predictor_models:/models
     networks:

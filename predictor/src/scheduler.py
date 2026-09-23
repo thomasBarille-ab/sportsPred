@@ -2,11 +2,13 @@
 
 Planification UTC :
   06:00 — ingestion Ligue 1 + NBA
+  06:30 — ingestion des cotes (The Odds API)
   07:00 — génération des prédictions (+ explications Claude)
   08:00 — évaluation des prédictions (résultats connus)
   09:00 — analyse agent Claude (tool use, patterns d'échec)
   10:00 — résumé Ollama
   03:00 lundi — réentraînement Ligue 1 + NBA
+  01/01 03:00 — backfill cotes historiques (idempotent, déclenchable manuellement)
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
+from .jobs.odds_ingest import run_odds_ingest
+from .jobs.odds_backfill import run_odds_backfill
 from .log_capture import capture_steps
 from .summaries.ollama import generate_summary
 
@@ -106,6 +110,14 @@ def _build_metrics_snapshot() -> dict:
     return result
 
 
+def _job_odds_ingest(cfg: Settings) -> None:
+    _log_job("odds_ingest", None, run_odds_ingest, cfg.odds_api_key)
+
+
+def _job_odds_backfill(cfg: Settings) -> None:
+    _log_job("odds_backfill", None, run_odds_backfill)
+
+
 def _job_ingest(cfg: Settings) -> None:
     fd = FootballDataProvider(cfg.football_data_api_key)
     bdl = BallDontLieProvider(cfg.balldontlie_api_key)
@@ -169,6 +181,12 @@ def start_scheduler(cfg: Settings) -> None:
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
+        lambda: _job_odds_ingest(cfg),
+        CronTrigger(hour=h % 24, minute=30),
+        id="odds_ingest", name="Ingestion cotes The Odds API",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
         lambda: _job_predict(cfg),
         CronTrigger(hour=(h + 1) % 24, minute=0),
         id="predict", name="Génération prédictions",
@@ -196,6 +214,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_retrain(cfg),
         CronTrigger(day_of_week=cfg.retrain_weekday, hour=cfg.retrain_hour_utc, minute=0),
         id="retrain", name="Réentraînement modèles",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_odds_backfill(cfg),
+        CronTrigger(month=1, day=1, hour=3, minute=0),
+        id="odds_backfill", name="Backfill historique cotes (one-shot manuel)",
         max_instances=1, coalesce=True,
     )
 
