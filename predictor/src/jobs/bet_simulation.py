@@ -49,34 +49,7 @@ def _best_ev(
     return best if best[2] > _MIN_EV_PCT else None
 
 
-def _fetch_candidates(lookback_days: int | None) -> list[dict]:
-    if lookback_days is not None:
-        return session.fetch_all(
-            """
-            SELECT DISTINCT ON (p.fixture_id)
-                   p.id              AS prediction_id,
-                   p.fixture_id,
-                   f.sport,
-                   p.prob_home_win,
-                   p.prob_draw,
-                   p.prob_away_win,
-                   mo.bookmaker,
-                   mo.odds_home,
-                   mo.odds_draw,
-                   mo.odds_away
-            FROM predictions p
-            JOIN fixtures f ON f.id = p.fixture_id
-            JOIN match_odds mo ON mo.fixture_id = p.fixture_id
-            LEFT JOIN bet_simulations bs ON bs.fixture_id = p.fixture_id
-            WHERE bs.id IS NULL
-              AND f.status IN ('SCHEDULED', 'TIMED', 'FINISHED')
-              AND f.match_date >= NOW() - (%s || ' days')::interval
-            ORDER BY p.fixture_id,
-              CASE WHEN mo.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
-              mo.fetched_at DESC
-            """,
-            (lookback_days,),
-        )
+def _fetch_candidates() -> list[dict]:
     return session.fetch_all(
         """
         SELECT DISTINCT ON (p.fixture_id)
@@ -95,7 +68,8 @@ def _fetch_candidates(lookback_days: int | None) -> list[dict]:
         JOIN match_odds mo ON mo.fixture_id = p.fixture_id
         LEFT JOIN bet_simulations bs ON bs.fixture_id = p.fixture_id
         WHERE bs.id IS NULL
-          AND f.status IN ('SCHEDULED', 'TIMED', 'FINISHED')
+          AND f.status IN ('SCHEDULED', 'TIMED')
+          AND f.match_date >= NOW() - INTERVAL '48 hours'
         ORDER BY p.fixture_id,
           CASE WHEN mo.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
           mo.fetched_at DESC
@@ -105,16 +79,11 @@ def _fetch_candidates(lookback_days: int | None) -> list[dict]:
 
 def run_bet_simulation() -> dict:
     """Génère les simulations de paris pour les prédictions des 48 dernières heures."""
-    return _run(lookback_days=2)
+    return _run()
 
 
-def run_bet_backfill() -> dict:
-    """Génère les simulations de paris sur tout l'historique disponible."""
-    return _run(lookback_days=None)
-
-
-def _run(lookback_days: int | None) -> dict:
-    rows = _fetch_candidates(lookback_days)
+def _run() -> dict:
+    rows = _fetch_candidates()
 
     log.info("bet_simulation.start", candidats=len(rows))
 
