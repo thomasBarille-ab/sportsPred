@@ -29,7 +29,7 @@ from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
 from .jobs.odds_ingest import run_odds_ingest
 from .jobs.odds_backfill import run_odds_backfill
-from .jobs.bet_simulation import run_bet_simulation
+from .jobs.bet_simulation import run_bet_simulation, run_bet_backfill
 from .log_capture import capture_steps
 from .summaries.ollama import generate_summary
 
@@ -113,6 +113,10 @@ def _build_metrics_snapshot() -> dict:
 
 def _job_bet_simulation() -> None:
     _log_job("bet_simulation", None, run_bet_simulation)
+
+
+def _job_bet_backfill() -> None:
+    _log_job("bet_backfill", None, run_bet_backfill)
 
 
 def _job_odds_ingest(cfg: Settings) -> None:
@@ -231,6 +235,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_odds_backfill(cfg),
         CronTrigger(month=1, day=1, hour=3, minute=0),
         id="odds_backfill", name="Backfill historique cotes (one-shot manuel)",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        _job_bet_backfill,
+        CronTrigger(month=1, day=1, hour=4, minute=0),
+        id="bet_backfill", name="Backfill simulations de paris (one-shot manuel)",
         max_instances=1, coalesce=True,
     )
 
