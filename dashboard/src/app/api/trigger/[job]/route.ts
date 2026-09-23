@@ -4,7 +4,7 @@ import { requireAccess } from "@/lib/auth";
 const PREDICTOR_URL = process.env.PREDICTOR_URL ?? "http://predictor:8080";
 const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN ?? "";
 
-const ALLOWED_JOBS = ["ingest", "predict", "evaluate", "retrain", "summary", "agent_analysis", "odds_ingest", "odds_backfill", "bet_simulation", "bet_backfill"];
+const ALLOWED_JOBS = ["ingest", "predict", "evaluate", "retrain", "summary", "agent_analysis", "odds_ingest", "odds_backfill", "bet_simulation", "bet_backfill", "predict_backfill"];
 
 export async function POST(
   req: NextRequest,

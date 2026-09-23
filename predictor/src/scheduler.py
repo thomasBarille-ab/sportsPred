@@ -26,6 +26,7 @@ from .db import session
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .jobs import evaluate, ingest, predict, retrain
+from .jobs.predict import run_predict_backfill
 from .jobs.agent_analysis import run_agent_analysis_job
 from .jobs.odds_ingest import run_odds_ingest
 from .jobs.odds_backfill import run_odds_backfill
@@ -117,6 +118,11 @@ def _job_bet_simulation() -> None:
 
 def _job_bet_backfill() -> None:
     _log_job("bet_backfill", None, run_bet_backfill)
+
+
+def _job_predict_backfill() -> None:
+    for sport in ("ligue1", "nba"):
+        _log_job("predict_backfill", sport, run_predict_backfill, sport)
 
 
 def _job_odds_ingest(cfg: Settings) -> None:
@@ -241,6 +247,12 @@ def start_scheduler(cfg: Settings) -> None:
         _job_bet_backfill,
         CronTrigger(month=1, day=1, hour=4, minute=0),
         id="bet_backfill", name="Backfill simulations de paris (one-shot manuel)",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        _job_predict_backfill,
+        CronTrigger(month=1, day=1, hour=5, minute=0),
+        id="predict_backfill", name="Backfill prédictions historiques (one-shot manuel)",
         max_instances=1, coalesce=True,
     )
 

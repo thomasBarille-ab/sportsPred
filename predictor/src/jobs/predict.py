@@ -89,6 +89,28 @@ def _generate_explanation(
         return None
 
 
+def _json_snapshot(snapshot: dict) -> str:
+    """Sérialise le features_snapshot en JSON — remplace NaN/Inf par null."""
+    import math
+    cleaned = {
+        k: (None if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
+        for k, v in snapshot.items()
+    }
+    return json.dumps(cleaned)
+
+
+def _align_features(vec: list[float], built_names: list[str], model_names: list[str]) -> list[float]:
+    """Aligne le vecteur de features aux noms attendus par le modèle.
+
+    Nécessaire quand le builder a plus de features que le modèle en prod
+    (transition entre PIPELINE_VERSION). Features inconnues du modèle → NaN.
+    """
+    if built_names == model_names:
+        return vec
+    name_to_val = dict(zip(built_names, vec))
+    return [name_to_val.get(f, float("nan")) for f in model_names]
+
+
 def _get_all_matches_for_sport(sport: str) -> list[dict]:
     return session.fetch_all(
         """
@@ -206,7 +228,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             odds_away = fixture_odds[2] if fixture_odds else None
 
             if sport == "ligue1":
-                vec, _ = build_features_ligue1(
+                vec, built_names = build_features_ligue1(
                     fixture["home_team_id"], fixture["away_team_id"],
                     match_date, finished_list,
                     elo_state, dc_model,
@@ -214,7 +236,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
                 )
             else:
-                vec, _ = build_features_nba(
+                vec, built_names = build_features_nba(
                     fixture["home_team_id"], fixture["away_team_id"],
                     match_date, finished_list,
                     elo_state,
@@ -222,7 +244,8 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     odds_home=odds_home, odds_away=odds_away,
                 )
 
-            X     = np.array([vec])
+            aligned = _align_features(vec, built_names, feature_names)
+            X     = np.array([aligned])
             proba = model.predict_proba(X)[0]
 
             if sport == "ligue1":
@@ -237,7 +260,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             else:
                 predicted_outcome = "home" if p_home >= 0.5 else "away"
 
-            snapshot = dict(zip(feature_names, [round(v, 4) for v in vec]))
+            snapshot = dict(zip(built_names, [round(v, 4) for v in vec]))
             confidence = float(max(proba))
 
             explanation = _generate_explanation(
@@ -309,7 +332,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     fixture["id"], prod_model["id"],
                     p_home, p_draw, p_away,
                     predicted_outcome,
-                    json.dumps(snapshot),
+                    _json_snapshot(snapshot),
                     explanation,
                 ),
             )
@@ -328,4 +351,138 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
         prédictions_générées=n_predicted,
         déjà_existantes=len(unpredicted) - n_predicted,
     )
+    return n_predicted
+
+
+def run_predict_backfill(sport: str) -> int:
+    """Génère des prédictions rétroactives pour tous les matchs terminés sans prédiction.
+
+    Utilise les features avec filtrage temporel strict (pas de fuite de données dans
+    rolling stats / H2H / xG). L'ELO est calculé depuis l'état actuel — léger biais
+    acceptable pour un backfill de démo.
+    Sans génération d'explication (trop coûteux en bulk).
+    """
+    prod_model = session.fetch_one(
+        "SELECT * FROM model_versions WHERE sport = %s AND is_production = TRUE LIMIT 1",
+        (sport,),
+    )
+    if not prod_model:
+        log.warning("predict_backfill.no_model", sport=sport)
+        return 0
+
+    artifact      = joblib.load(prod_model["model_path"])
+    model         = artifact["model"]
+    feature_names = artifact["feature_names"]
+    dc_model      = artifact.get("dc_model")
+
+    all_matches    = _get_all_matches_for_sport(sport)
+    finished_matches = [m for m in all_matches if m.get("home_score") is not None]
+    ratings = compute_elo_ratings(finished_matches, sport)
+    elo_state = build_elo_state(sport)
+    elo_state.ratings = ratings
+    schedule = [m for m in all_matches if m.get("status") not in ("CANCELLED", "POSTPONED")]
+
+    unpredicted = session.fetch_all(
+        """
+        SELECT f.id, f.home_team_id, f.home_team_name,
+               f.away_team_id, f.away_team_name, f.match_date
+        FROM fixtures f
+        LEFT JOIN predictions p ON p.fixture_id = f.id
+        WHERE f.sport = %s
+          AND f.home_score IS NOT NULL
+          AND p.id IS NULL
+        ORDER BY f.match_date
+        """,
+        (sport,),
+    )
+
+    log.info("predict_backfill.start", sport=sport, fixtures=len(unpredicted))
+    if not unpredicted:
+        return 0
+
+    fixture_ids = [f["id"] for f in unpredicted]
+    odds_by_fixture: dict[int, tuple] = {}
+    odds_rows = session.fetch_all(
+        """
+        SELECT DISTINCT ON (fixture_id) fixture_id, odds_home, odds_draw, odds_away
+        FROM match_odds
+        WHERE fixture_id = ANY(%s)
+        ORDER BY fixture_id,
+          CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+          fetched_at DESC
+        """,
+        (fixture_ids,),
+    )
+    for r in odds_rows:
+        odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
+
+    finished_list = [m for m in all_matches if m.get("home_score") is not None]
+    n_predicted = 0
+
+    for fixture in unpredicted:
+        try:
+            match_date = fixture["match_date"]
+            if match_date.tzinfo is None:
+                match_date = match_date.replace(tzinfo=timezone.utc)
+
+            fixture_odds = odds_by_fixture.get(fixture["id"])
+            odds_home = fixture_odds[0] if fixture_odds else None
+            odds_draw = fixture_odds[1] if fixture_odds else None
+            odds_away = fixture_odds[2] if fixture_odds else None
+
+            if sport == "ligue1":
+                vec, built_names = build_features_ligue1(
+                    fixture["home_team_id"], fixture["away_team_id"],
+                    match_date, finished_list,
+                    elo_state, dc_model,
+                    schedule=schedule,
+                    odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                )
+            else:
+                vec, built_names = build_features_nba(
+                    fixture["home_team_id"], fixture["away_team_id"],
+                    match_date, finished_list,
+                    elo_state,
+                    schedule=schedule,
+                    odds_home=odds_home, odds_away=odds_away,
+                )
+
+            aligned = _align_features(vec, built_names, feature_names)
+            X     = np.array([aligned])
+            proba = model.predict_proba(X)[0]
+
+            if sport == "ligue1":
+                p_home, p_draw, p_away = float(proba[0]), float(proba[1]), float(proba[2])
+                max_idx = int(np.argmax(proba))
+                predicted_outcome = {0: "home", 1: "draw", 2: "away"}[max_idx]
+            else:
+                p_home, p_draw, p_away = float(proba[1]), None, float(proba[0])
+                predicted_outcome = "home" if p_home >= 0.5 else "away"
+
+            snapshot = dict(zip(built_names, [round(v, 4) for v in vec]))
+
+            session.execute(
+                """
+                INSERT INTO predictions
+                  (fixture_id, model_version_id, prob_home_win, prob_draw,
+                   prob_away_win, predicted_outcome, features_snapshot, explanation)
+                VALUES (%s,%s,%s,%s,%s,%s,%s, NULL)
+                ON CONFLICT (fixture_id) DO NOTHING
+                """,
+                (
+                    fixture["id"], prod_model["id"],
+                    p_home, p_draw, p_away,
+                    predicted_outcome,
+                    _json_snapshot(snapshot),
+                ),
+            )
+            n_predicted += 1
+
+        except Exception as exc:
+            log.error("predict_backfill.erreur",
+                      fixture_id=fixture["id"],
+                      erreur=str(exc))
+            continue
+
+    log.info("predict_backfill.done", sport=sport, predicted=n_predicted)
     return n_predicted
