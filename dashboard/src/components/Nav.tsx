@@ -6,6 +6,7 @@ const links = [
   { href: "/nba",     label: "NBA" },
   { href: "/models",  label: "Modèles" },
   { href: "/logs",    label: "Logs" },
+  { href: "/betting", label: "Paris" },
   { href: "/chat",    label: "Agent" },
 ];
 

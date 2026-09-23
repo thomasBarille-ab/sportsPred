@@ -107,4 +107,52 @@ def run_evaluate(sport: str) -> int:
         ratés=n_wrong,
         accuracy_batch=f"{accuracy:.0%}",
     )
+
+    # ── Settlement des bet_simulations pending ────────────────────────────────
+    _settle_bets(sport)
+
     return n_scored
+
+
+def _settle_bets(sport: str) -> None:
+    """Settle les bet_simulations pending dont le résultat est maintenant connu."""
+    pending = session.fetch_all(
+        """
+        SELECT bs.id, bs.fixture_id, bs.odds_taken, bs.stake_units, bs.bet_outcome
+        FROM bet_simulations bs
+        JOIN fixtures f ON f.id = bs.fixture_id
+        JOIN results r ON r.fixture_id = bs.fixture_id
+        WHERE f.sport = %s AND bs.status = 'pending'
+          AND bs.bet_outcome IS NOT NULL
+        """,
+        (sport,),
+    )
+
+    if not pending:
+        return
+
+    n_won = n_lost = 0
+    for b in pending:
+        actual = session.fetch_one(
+            "SELECT actual_outcome FROM results WHERE fixture_id = %s",
+            (b["fixture_id"],),
+        )
+        if not actual:
+            continue
+
+        won = actual["actual_outcome"] == b["bet_outcome"]
+        pnl = b["stake_units"] * (b["odds_taken"] - 1) if won else -b["stake_units"]
+        status = "won" if won else "lost"
+
+        session.execute(
+            """
+            UPDATE bet_simulations
+            SET status = %s, pnl_units = %s, settled_at = NOW()
+            WHERE id = %s
+            """,
+            (status, round(pnl, 4), b["id"]),
+        )
+        if won: n_won += 1
+        else:   n_lost += 1
+
+    log.info("evaluate.bets_settled", sport=sport, won=n_won, lost=n_lost)

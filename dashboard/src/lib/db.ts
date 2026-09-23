@@ -137,6 +137,86 @@ export async function getMatchdaySummary(sport: string) {
   `;
 }
 
+export async function getBettingKPIs() {
+  const rows = await sql`
+    SELECT
+      COUNT(*)                                                   AS total_bets,
+      COUNT(*) FILTER (WHERE status = 'won')                     AS won,
+      COUNT(*) FILTER (WHERE status = 'lost')                    AS lost,
+      COUNT(*) FILTER (WHERE status = 'pending')                 AS pending,
+      ROUND(SUM(pnl_units)::numeric, 2)                          AS total_pnl,
+      ROUND(
+        COUNT(*) FILTER (WHERE status = 'won')::float
+        / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)
+      ::numeric, 3)                                              AS win_rate,
+      ROUND(
+        SUM(pnl_units) / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)
+      ::numeric, 4)                                              AS avg_pnl_per_bet,
+      ROUND(AVG(ev_pct)::numeric, 4)                             AS avg_ev_pct
+    FROM bet_simulations
+  `;
+  return rows[0] ?? null;
+}
+
+export async function getBankrollHistory() {
+  return sql`
+    SELECT
+      DATE_TRUNC('day', settled_at)                         AS day,
+      SUM(pnl_units) OVER (ORDER BY settled_at)             AS cumulative_pnl,
+      pnl_units,
+      status
+    FROM bet_simulations
+    WHERE status IN ('won', 'lost')
+    ORDER BY settled_at
+  `;
+}
+
+export async function getUpcomingValueBets() {
+  return sql`
+    SELECT
+      bs.id,
+      f.home_team_name,
+      f.away_team_name,
+      f.match_date,
+      f.sport,
+      bs.bet_outcome,
+      bs.bookmaker,
+      ROUND(bs.odds_taken::numeric, 2)   AS odds_taken,
+      ROUND(bs.ev_pct::numeric, 4)       AS ev_pct,
+      ROUND(p.prob_home_win::numeric, 2) AS prob_home,
+      ROUND(p.prob_draw::numeric, 2)     AS prob_draw,
+      ROUND(p.prob_away_win::numeric, 2) AS prob_away
+    FROM bet_simulations bs
+    JOIN fixtures f ON f.id = bs.fixture_id
+    JOIN predictions p ON p.id = bs.prediction_id
+    WHERE bs.status = 'pending'
+    ORDER BY f.match_date ASC
+    LIMIT 20
+  `;
+}
+
+export async function getBetHistory(limit = 50) {
+  return sql`
+    SELECT
+      f.home_team_name,
+      f.away_team_name,
+      f.match_date,
+      f.sport,
+      bs.bet_outcome,
+      bs.bookmaker,
+      ROUND(bs.odds_taken::numeric, 2)  AS odds_taken,
+      ROUND(bs.ev_pct::numeric, 4)      AS ev_pct,
+      bs.status,
+      ROUND(bs.pnl_units::numeric, 2)   AS pnl_units,
+      bs.settled_at
+    FROM bet_simulations bs
+    JOIN fixtures f ON f.id = bs.fixture_id
+    WHERE bs.status IN ('won', 'lost')
+    ORDER BY bs.settled_at DESC
+    LIMIT ${limit}
+  `;
+}
+
 export async function getLatestSummary() {
   const rows = await sql`
     SELECT content, summary_date, generated_at, agent_report
