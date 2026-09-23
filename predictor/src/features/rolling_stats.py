@@ -85,25 +85,23 @@ def compute_rolling_stats(
 ) -> dict[str, float]:
     """Statistiques glissantes sur `window` matchs terminés avant `match_date`.
 
-    `schedule` : si fourni, utilisé pour is_back2back et days_since à la place de
-    all_matches (permet d'inclure les matchs planifiés non encore joués).
-    Par défaut, all_matches est utilisé pour les deux (comportement inchangé).
+    Retourne ortg/drtg/net_rtg pace-adjusted + win_rate + is_back2back.
 
-    Retourne un dict de features avec des valeurs par défaut neutres si
-    pas assez de données.
+    ortg = pts_scored / pace * 100  où pace = (pts_scored + pts_allowed) / 2
+    Un ortg de 110 signifie +10% d'efficacité offensive vs le pace du match.
+    Defaults neutres : ortg=100, drtg=100, net_rtg=0 (équipe moyenne).
     """
     defaults = {
-        "ppg": 110.0,
-        "oppg": 110.0,
+        "ortg": 100.0,
+        "drtg": 100.0,
+        "net_rtg": 0.0,
         "win_rate": 0.5,
         "is_back2back": 0.0,
         "n_games": 0.0,
     }
 
-    # La forme (ppg, win_rate) est toujours calculée depuis les matchs TERMINÉS
     games = _team_games(team_id, all_matches, before=match_date)
 
-    # Le B2B et le repos se calculent depuis le calendrier complet si fourni
     cal = schedule if schedule is not None else all_matches
     is_b2b = is_back2back_from_schedule(team_id, match_date, cal)
 
@@ -113,23 +111,28 @@ def compute_rolling_stats(
     recent = games[:window]
     n = len(recent)
 
-    pts_scored = []
-    pts_allowed = []
+    ortg_vals = []
+    drtg_vals = []
     wins = []
 
     for m in recent:
         is_home = m["home_team_id"] == team_id
-        scored  = m["home_score"] if is_home else m["away_score"]
-        allowed = m["away_score"] if is_home else m["home_score"]
-        pts_scored.append(scored)
-        pts_allowed.append(allowed)
-        # _outcome gère déjà le point de vue de team_id (home ou away)
+        scored  = float(m["home_score"] if is_home else m["away_score"])
+        allowed = float(m["away_score"] if is_home else m["home_score"])
+        pace = (scored + allowed) / 2.0
+        if pace > 0:
+            ortg_vals.append(scored / pace * 100.0)
+            drtg_vals.append(allowed / pace * 100.0)
         w = _outcome(team_id, m)
         wins.append(w if w is not None else 0.5)
 
+    ortg = sum(ortg_vals) / len(ortg_vals) if ortg_vals else 100.0
+    drtg = sum(drtg_vals) / len(drtg_vals) if drtg_vals else 100.0
+
     return {
-        "ppg": sum(pts_scored) / n,
-        "oppg": sum(pts_allowed) / n,
+        "ortg": ortg,
+        "drtg": drtg,
+        "net_rtg": ortg - drtg,
         "win_rate": sum(wins) / n,
         "is_back2back": is_b2b,
         "n_games": float(n),

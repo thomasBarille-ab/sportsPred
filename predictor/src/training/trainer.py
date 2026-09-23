@@ -50,7 +50,7 @@ HYPERPARAMS_NBA: dict = {
     "colsample_bytree": 0.8,
 }
 
-PIPELINE_VERSION = 3
+PIPELINE_VERSION = 4
 
 
 @dataclass

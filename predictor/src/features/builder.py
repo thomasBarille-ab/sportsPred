@@ -1,6 +1,6 @@
 """Construit le vecteur de features pour un match donné.
 
-Ligue 1 features (23) :
+Ligue 1 features (27) :
   elo_home, elo_away, elo_diff,
   dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
@@ -11,10 +11,10 @@ Ligue 1 features (23) :
   home_xg_last5, home_xga_last5, away_xg_last5, away_xga_last5,  [Understat]
   implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
 
-NBA features (18) :
+NBA features (21) :
   elo_home, elo_away, elo_diff,
-  home_ppg_last10, home_oppg_last10, home_win_rate_last10, home_b2b,
-  away_ppg_last10, away_oppg_last10, away_win_rate_last10, away_b2b,
+  home_ortg, home_drtg, home_net_rtg, home_win_rate_last10, home_b2b,
+  away_ortg, away_drtg, away_net_rtg, away_win_rate_last10, away_b2b,
   h2h_home_wins, h2h_away_wins,
   days_since_home_game, days_since_away_game,
   implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
@@ -50,8 +50,8 @@ LIGUE1_FEATURES = [
 
 NBA_FEATURES = [
     "elo_home", "elo_away", "elo_diff",
-    "home_ppg_last10", "home_oppg_last10", "home_win_rate_last10", "home_b2b",
-    "away_ppg_last10", "away_oppg_last10", "away_win_rate_last10", "away_b2b",
+    "home_ortg", "home_drtg", "home_net_rtg", "home_win_rate_last10", "home_b2b",
+    "away_ortg", "away_drtg", "away_net_rtg", "away_win_rate_last10", "away_b2b",
     "h2h_home_wins", "h2h_away_wins",
     "days_since_home_game", "days_since_away_game",
     "implied_prob_home", "implied_prob_away", "market_efficiency",
@@ -246,8 +246,8 @@ def build_features_nba(
 
     vec = [
         elo_h, elo_a, elo_h - elo_a,
-        h_stats["ppg"], h_stats["oppg"], h_stats["win_rate"], h_stats["is_back2back"],
-        a_stats["ppg"], a_stats["oppg"], a_stats["win_rate"], a_stats["is_back2back"],
+        h_stats["ortg"], h_stats["drtg"], h_stats["net_rtg"], h_stats["win_rate"], h_stats["is_back2back"],
+        a_stats["ortg"], a_stats["drtg"], a_stats["net_rtg"], a_stats["win_rate"], a_stats["is_back2back"],
         h2h["h2h_home_wins"], h2h["h2h_away_wins"],
         days_h, days_a,
         imp_h, imp_a, overround,

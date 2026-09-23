@@ -48,11 +48,11 @@ def _score_champion_on_holdout(
         return None
 
     # Vérifie la version du pipeline
-    if artifact.get("pipeline_version", 0) < 3:
+    if artifact.get("pipeline_version", 0) < 4:
         log.info(
             "retrain.champion_legacy",
             sport=sport,
-            reason="pipeline_version < 3 — considéré comme legacy, promotion automatique du challenger",
+            reason="pipeline_version < 4 — considéré comme legacy, promotion automatique du challenger",
         )
         return None
 
