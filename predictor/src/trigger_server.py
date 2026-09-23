@@ -4,7 +4,7 @@ Tourne dans un thread daemon aux côtés d'APScheduler.
 
 Endpoints :
   POST /run/<job_id>   — déclenche un job immédiatement
-  POST /chat           — chat avec l'agent (Ollama + contexte DB)
+  POST /chat           — chat avec l'agent Claude (tool use + DB)
 
 Sécurité :
   Tous les POST requièrent l'en-tête X-Internal-Token égal à INTERNAL_API_TOKEN.
@@ -17,11 +17,11 @@ from __future__ import annotations
 import hmac
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
-import httpx
 import structlog
 
 from .db import session
@@ -32,169 +32,344 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-# Configurés au démarrage via start_trigger_server()
-_OLLAMA_URL:        str = "http://ollama:11434"
-_OLLAMA_MODEL:      str = "llama3.2:3b"
+_ANTHROPIC_API_KEY: str = ""
 _INTERNAL_TOKEN:    str = ""
 
 _EXPLICIT_COMMANDS = {"/ingest", "/predict", "/evaluate", "/retrain", "/summary"}
 
+_CHAT_MODEL      = "claude-haiku-4-5"
+_CHAT_MAX_TURNS  = 6
+_CHAT_MAX_TOKENS = 1024
 
-# ── Contexte DB pour le chat ──────────────────────────────────────────────────
+_CHAT_SYSTEM = """\
+Tu es l'assistant du système de prédiction sportive (Ligue 1 + NBA).
+Tu réponds en français, de façon concise et directe.
 
-def _build_context() -> str:
-    lines: list[str] = []
+Tu as accès à des outils pour interroger les données en temps réel :
+prédictions, performances des modèles, matchs à venir, paris EV+.
 
-    models = session.fetch_all(
+Utilise les outils quand la question porte sur des données concrètes.
+Pour les questions générales sur le fonctionnement du système, réponds directement.
+
+Si l'utilisateur demande à déclencher un job, indique-lui d'utiliser
+les commandes : /ingest · /predict · /evaluate · /retrain · /summary
+"""
+
+_CHAT_TOOLS: list[dict] = [
+    {
+        "name": "get_recent_predictions",
+        "description": "Retourne les dernières prédictions avec résultat, probabilités et Brier score.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "n": {"type": "integer", "description": "Nombre de prédictions (max 20)", "default": 10},
+            },
+            "required": ["sport"],
+        },
+    },
+    {
+        "name": "get_model_performance",
+        "description": "Performances du modèle sur une fenêtre glissante : Brier score et accuracy par semaine.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "days": {"type": "integer", "description": "Fenêtre en jours (ex: 30, 60, 90)", "default": 30},
+            },
+            "required": ["sport"],
+        },
+    },
+    {
+        "name": "get_failure_patterns",
+        "description": "Compare les features moyennes entre prédictions correctes et incorrectes. Révèle les biais du modèle.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+            },
+            "required": ["sport"],
+        },
+    },
+    {
+        "name": "get_upcoming_fixtures",
+        "description": "Matchs à venir avec leurs prédictions (si disponibles) et les cotes bookmaker.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "days": {"type": "integer", "description": "Horizon en jours (défaut 7)", "default": 7},
+            },
+            "required": ["sport"],
+        },
+    },
+    {
+        "name": "get_value_bets",
+        "description": "Paris à valeur positive (EV > 0) en attente de résultat, triés par EV décroissant.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_betting_performance",
+        "description": "Statistiques globales des simulations de paris : win rate, P&L total, EV moyen.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+]
+
+
+# ── Implémentation des tools ──────────────────────────────────────────────────
+
+def _serialize(obj: Any) -> Any:
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return str(obj)
+
+
+def _tool_get_recent_predictions(sport: str, n: int = 10) -> list[dict]:
+    n = min(max(n, 1), 20)
+    rows = session.fetch_all(
         """
-        SELECT sport, version, trained_at,
-               ROUND(holdout_brier::numeric, 4)    AS brier,
-               ROUND(holdout_accuracy::numeric, 3) AS accuracy,
-               training_samples
-        FROM model_versions
-        WHERE is_production = TRUE
-        ORDER BY sport
-        """
-    )
-    if models:
-        lines.append("=== MODÈLES EN PRODUCTION ===")
-        for m in models:
-            sport_label = "Ligue 1" if m["sport"] == "ligue1" else "NBA"
-            lines.append(
-                f"  {sport_label}: {m['version']} | "
-                f"accuracy={float(m['accuracy'] or 0):.1%} | "
-                f"Brier={float(m['brier'] or 0):.4f} | "
-                f"entraîné sur {m['training_samples']} matchs"
-            )
-
-    recent = session.fetch_all(
-        """
-        SELECT f.sport, f.home_team_name, f.away_team_name, f.match_date,
+        SELECT f.home_team_name, f.away_team_name, f.match_date,
                p.predicted_outcome,
                ROUND(p.prob_home_win::numeric, 2) AS p_home,
                ROUND(p.prob_draw::numeric, 2)     AS p_draw,
                ROUND(p.prob_away_win::numeric, 2) AS p_away,
+               p.explanation,
                r.actual_outcome,
                ps.is_correct,
-               ROUND(ps.brier_score::numeric, 4)  AS brier
+               ROUND(ps.brier_score::numeric, 4)  AS brier_score
         FROM predictions p
-        JOIN fixtures f       ON f.id = p.fixture_id
-        LEFT JOIN results r   ON r.fixture_id = p.fixture_id
+        JOIN fixtures f ON f.id = p.fixture_id
         LEFT JOIN prediction_scores ps ON ps.prediction_id = p.id
+        LEFT JOIN results r ON r.fixture_id = p.fixture_id
+        WHERE f.sport = %s
         ORDER BY f.match_date DESC
-        LIMIT 10
-        """
+        LIMIT %s
+        """,
+        (sport, n),
     )
-    if recent:
-        lines.append("\n=== PRÉDICTIONS RÉCENTES ===")
-        for r in recent:
-            sport_label = "L1" if r["sport"] == "ligue1" else "NBA"
-            date_str = str(r["match_date"])[:10]
-            verdict = ""
-            if r["is_correct"] is True:  verdict = " ✓"
-            elif r["is_correct"] is False: verdict = " ✗"
-            probs = f"dom={float(r['p_home'] or 0):.0%}"
-            if r["p_draw"] is not None:
-                probs += f" nul={float(r['p_draw'] or 0):.0%}"
-            probs += f" ext={float(r['p_away'] or 0):.0%}"
-            actual = f" → réel: {r['actual_outcome']}" if r["actual_outcome"] else " → match à venir"
-            lines.append(
-                f"  [{sport_label}] {date_str} | "
-                f"{r['home_team_name']} vs {r['away_team_name']} | "
-                f"prédit: {r['predicted_outcome']} ({probs})"
-                f"{actual}{verdict}"
-            )
+    return [dict(r) for r in rows]
 
-    upcoming_no_pred = session.fetch_all(
+
+def _tool_get_model_performance(sport: str, days: int = 30) -> dict:
+    days = min(max(days, 7), 365)
+    summary = session.fetch_one(
         """
-        SELECT f.sport, f.home_team_name, f.away_team_name, f.match_date
+        SELECT COUNT(ps.id)                                         AS total,
+               ROUND(AVG(ps.brier_score)::numeric, 4)               AS avg_brier,
+               ROUND(AVG(ps.is_correct::int::float)::numeric, 3)    AS accuracy
+        FROM prediction_scores ps
+        JOIN fixtures f ON f.id = ps.fixture_id
+        WHERE f.sport = %s
+          AND f.match_date >= NOW() - (%s || ' days')::interval
+        """,
+        (sport, days),
+    )
+    weekly = session.fetch_all(
+        f"""
+        SELECT DATE_TRUNC('week', f.match_date)                     AS week,
+               COUNT(ps.id)                                          AS n,
+               ROUND(AVG(ps.brier_score)::numeric, 4)                AS avg_brier,
+               ROUND(AVG(ps.is_correct::int::float)::numeric, 3)    AS accuracy
+        FROM prediction_scores ps
+        JOIN fixtures f ON f.id = ps.fixture_id
+        WHERE f.sport = %s
+          AND f.match_date >= NOW() - INTERVAL '{days} days'
+        GROUP BY 1 ORDER BY 1
+        """,
+        (sport,),
+    )
+    model = session.fetch_one(
+        "SELECT version, trained_at, training_samples FROM model_versions WHERE sport = %s AND is_production = TRUE LIMIT 1",
+        (sport,),
+    )
+    return {
+        "sport": sport,
+        "window_days": days,
+        "summary": dict(summary) if summary else {},
+        "weekly_trend": [dict(r) for r in weekly],
+        "production_model": dict(model) if model else {},
+        "baselines": {"ligue1": 0.667, "nba": 0.25}.get(sport),
+    }
+
+
+def _tool_get_failure_patterns(sport: str) -> dict:
+    rows = session.fetch_all(
+        """
+        SELECT ps.is_correct,
+               COUNT(*)                                                            AS n,
+               ROUND(AVG((p.features_snapshot->>'elo_diff')::float)::numeric, 1)  AS avg_elo_diff,
+               ROUND(AVG(ps.brier_score)::numeric, 4)                             AS avg_brier,
+               ROUND(AVG(p.prob_home_win)::numeric, 3)                            AS avg_conf_home
+        FROM predictions p
+        JOIN prediction_scores ps ON ps.prediction_id = p.id
+        JOIN fixtures f ON f.id = p.fixture_id
+        WHERE f.sport = %s AND p.features_snapshot IS NOT NULL
+        GROUP BY ps.is_correct
+        """,
+        (sport,),
+    )
+    return {"sport": sport, "patterns": [dict(r) for r in rows]}
+
+
+def _tool_get_upcoming_fixtures(sport: str, days: int = 7) -> list[dict]:
+    days = min(max(days, 1), 30)
+    rows = session.fetch_all(
+        """
+        SELECT f.home_team_name, f.away_team_name, f.match_date, f.round,
+               p.predicted_outcome,
+               ROUND(p.prob_home_win::numeric, 2) AS p_home,
+               ROUND(p.prob_draw::numeric, 2)     AS p_draw,
+               ROUND(p.prob_away_win::numeric, 2) AS p_away,
+               p.explanation,
+               mo.odds_home, mo.odds_draw, mo.odds_away, mo.bookmaker,
+               bs.ev_pct, bs.bet_outcome AS recommended_bet
         FROM fixtures f
         LEFT JOIN predictions p ON p.fixture_id = f.id
-        WHERE p.id IS NULL
-          AND f.match_date >= NOW()
-          AND f.match_date <= NOW() + INTERVAL '7 days'
-          AND f.status IN ('SCHEDULED','TIMED')
+        LEFT JOIN LATERAL (
+            SELECT odds_home, odds_draw, odds_away, bookmaker
+            FROM match_odds WHERE fixture_id = f.id
+            ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END, fetched_at DESC
+            LIMIT 1
+        ) mo ON true
+        LEFT JOIN bet_simulations bs ON bs.fixture_id = f.id
+        WHERE f.sport = %s
+          AND f.status IN ('SCHEDULED', 'TIMED')
+          AND f.match_date BETWEEN NOW() AND NOW() + (%s || ' days')::interval
         ORDER BY f.match_date
-        LIMIT 5
+        """,
+        (sport, days),
+    )
+    return [dict(r) for r in rows]
+
+
+def _tool_get_value_bets() -> list[dict]:
+    rows = session.fetch_all(
+        """
+        SELECT f.sport, f.home_team_name, f.away_team_name, f.match_date,
+               bs.bet_outcome, bs.odds_taken, bs.ev_pct, bs.bookmaker,
+               p.predicted_outcome,
+               ROUND(p.prob_home_win::numeric, 2) AS p_home,
+               ROUND(p.prob_away_win::numeric, 2) AS p_away
+        FROM bet_simulations bs
+        JOIN fixtures f ON f.id = bs.fixture_id
+        JOIN predictions p ON p.id = bs.prediction_id
+        WHERE bs.status = 'pending' AND bs.ev_pct > 0
+        ORDER BY bs.ev_pct DESC
+        LIMIT 15
         """
     )
-    if upcoming_no_pred:
-        lines.append("\n=== MATCHS À VENIR SANS PRÉDICTION ===")
-        for u in upcoming_no_pred:
-            sport_label = "L1" if u["sport"] == "ligue1" else "NBA"
-            date_str = str(u["match_date"])[:16].replace("T", " ")
-            lines.append(f"  [{sport_label}] {date_str} | {u['home_team_name']} vs {u['away_team_name']}")
+    return [dict(r) for r in rows]
 
-    last_logs = session.fetch_all(
+
+def _tool_get_betting_performance() -> dict:
+    stats = session.fetch_one(
         """
-        SELECT job_name, sport, status, duration_seconds, records_processed, started_at
-        FROM agent_logs
-        ORDER BY started_at DESC
-        LIMIT 8
+        SELECT COUNT(*)                                            AS total_bets,
+               COUNT(*) FILTER (WHERE status = 'won')             AS won,
+               COUNT(*) FILTER (WHERE status = 'lost')            AS lost,
+               COUNT(*) FILTER (WHERE status = 'pending')         AS pending,
+               ROUND(SUM(pnl_units)::numeric, 2)                  AS total_pnl,
+               ROUND(AVG(ev_pct)::numeric, 4)                     AS avg_ev,
+               ROUND(
+                 COUNT(*) FILTER (WHERE status = 'won')::float
+                 / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)::numeric,
+               3)                                                  AS win_rate
+        FROM bet_simulations
         """
     )
-    if last_logs:
-        lines.append("\n=== DERNIERS JOBS ===")
-        for l in last_logs:
-            sport_str = f" ({l['sport']})" if l["sport"] else ""
-            dur = f" {round(float(l['duration_seconds']), 1)}s" if l["duration_seconds"] else ""
-            rec = f" {l['records_processed']} records" if l["records_processed"] else ""
-            ts = str(l["started_at"])[:16].replace("T", " ")
-            lines.append(f"  {ts} | {l['job_name']}{sport_str} → {l['status']}{dur}{rec}")
-
-    return "\n".join(lines)
+    return dict(stats) if stats else {}
 
 
-# ── Appel Ollama ──────────────────────────────────────────────────────────────
+def _execute_chat_tool(name: str, inputs: dict) -> Any:
+    try:
+        if name == "get_recent_predictions":
+            return _tool_get_recent_predictions(inputs["sport"], inputs.get("n", 10))
+        if name == "get_model_performance":
+            return _tool_get_model_performance(inputs["sport"], inputs.get("days", 30))
+        if name == "get_failure_patterns":
+            return _tool_get_failure_patterns(inputs["sport"])
+        if name == "get_upcoming_fixtures":
+            return _tool_get_upcoming_fixtures(inputs["sport"], inputs.get("days", 7))
+        if name == "get_value_bets":
+            return _tool_get_value_bets()
+        if name == "get_betting_performance":
+            return _tool_get_betting_performance()
+        return {"error": f"unknown tool: {name}"}
+    except Exception as exc:
+        log.warning("chat.tool_error", tool=name, error=str(exc))
+        return {"error": str(exc)}
 
-def _call_ollama(
-    message: str,
-    history: list[dict],
-    context: str,
-) -> str:
-    system = f"""Tu es l'agent de prédiction sportive. Tu surveilles et analyses en temps réel
-les performances des modèles de prédiction Ligue 1 et NBA.
 
-{context}
+# ── Agent Claude conversationnel ──────────────────────────────────────────────
 
-Pour déclencher un job, l'utilisateur doit envoyer une commande EXACTE :
-  /ingest    — récupérer les données récentes
-  /predict   — générer les prédictions
-  /evaluate  — scorer les prédictions dont le résultat est connu
-  /retrain   — réentraîner les modèles XGBoost
-  /summary   — générer le résumé Ollama
+def _call_claude_agent(message: str, history: list[dict]) -> str:
+    if not _ANTHROPIC_API_KEY:
+        return "[ANTHROPIC_API_KEY non configurée — chat Claude indisponible]"
 
-Tu ne déclenches aucune action de toi-même : toute action passe par ces commandes explicites.
-Réponds toujours en français, de façon concise et directe.
-Si tu ne sais pas quelque chose, dis-le clairement."""
+    try:
+        import anthropic
+    except ImportError:
+        return "[Package anthropic non installé]"
 
-    messages: list[dict] = [{"role": "system", "content": system}]
-    for h in history[-10:]:
+    client = anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
+
+    messages: list[dict] = []
+    for h in history[-8:]:
         messages.append(h)
     messages.append({"role": "user", "content": message})
 
     try:
-        resp = httpx.post(
-            f"{_OLLAMA_URL}/api/chat",
-            json={
-                "model": _OLLAMA_MODEL,
-                "messages": messages,
-                "stream": False,
-                "options": {"temperature": 0.6, "num_predict": 500},
-            },
-            timeout=120.0,
-        )
-        resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
+        for _ in range(_CHAT_MAX_TURNS):
+            response = client.messages.create(
+                model=_CHAT_MODEL,
+                max_tokens=_CHAT_MAX_TOKENS,
+                system=_CHAT_SYSTEM,
+                tools=_CHAT_TOOLS,
+                messages=messages,
+            )
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason == "end_turn":
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        return block.text.strip()
+                return ""
+
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        log.info("chat.tool_call", tool=block.name)
+                        result = _execute_chat_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result, default=_serialize),
+                        })
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            break
+
     except Exception as exc:
-        log.error("chat.ollama_error", error=str(exc))
-        return f"[Erreur Ollama : {exc}]"
+        log.error("chat.claude_error", error=str(exc))
+        return f"[Erreur Claude : {exc}]"
+
+    return "[Réponse non disponible]"
 
 
 # ── Handler HTTP ──────────────────────────────────────────────────────────────
 
 def _check_token(handler: "BaseHTTPRequestHandler") -> bool:
-    """Vérifie X-Internal-Token. Retourne True si valide, répond 401/503 sinon."""
     if not _INTERNAL_TOKEN:
         log.error("trigger_server.no_token_configured",
                   hint="Définir INTERNAL_API_TOKEN dans l'environnement")
@@ -218,7 +393,6 @@ def _send_json(handler: "BaseHTTPRequestHandler", code: int, body: dict) -> None
 
 
 def _read_body(handler: "BaseHTTPRequestHandler", max_bytes: int = 65536) -> dict | None:
-    """Lit et parse le body JSON. Retourne None si invalide ou trop grand."""
     try:
         length = int(handler.headers.get("Content-Length", 0))
     except ValueError:
@@ -266,7 +440,6 @@ class _TriggerHandler(BaseHTTPRequestHandler):
             _send_json(self, 404, {"error": f"job inconnu: {job_id}"})
             return
 
-        # Déclenche via APScheduler (pas de thread direct)
         job.modify(next_run_time=datetime.now(timezone.utc))
         log.info("trigger.job_lancé", job=job_id)
         _send_json(self, 202, {"status": "accepted", "job": job_id})
@@ -286,11 +459,10 @@ class _TriggerHandler(BaseHTTPRequestHandler):
             _send_json(self, 400, {"error": "message vide"})
             return
 
-        # Filtrage de l'historique : rôles user/assistant, contenu string, 10 msg max, 4000 chars max
         raw_history = body.get("history", [])
         history: list[dict] = []
         if isinstance(raw_history, list):
-            for item in raw_history[-10:]:
+            for item in raw_history[-8:]:
                 if (
                     isinstance(item, dict)
                     and item.get("role") in ("user", "assistant")
@@ -306,7 +478,7 @@ class _TriggerHandler(BaseHTTPRequestHandler):
         action_note: str | None = None
         stripped = message.lstrip()
         if stripped in _EXPLICIT_COMMANDS:
-            job_id = stripped[1:]  # retire le /
+            job_id = stripped[1:]
             scheduler = _TriggerHandler.scheduler
             if scheduler:
                 job = scheduler.get_job(job_id)
@@ -316,12 +488,7 @@ class _TriggerHandler(BaseHTTPRequestHandler):
                     action_note = "job lancé en arrière-plan"
                     log.info("chat.command_triggered", action=job_id)
 
-        try:
-            context = _build_context()
-        except Exception as exc:
-            context = f"[Erreur lors de la récupération du contexte: {exc}]"
-
-        response = _call_ollama(message, history, context)
+        response = _call_claude_agent(message, history)
 
         _send_json(self, 200, {
             "response": response,
@@ -340,10 +507,9 @@ def start_trigger_server(
     cfg: "Settings",
     port: int = 8080,
 ) -> None:
-    global _OLLAMA_URL, _OLLAMA_MODEL, _INTERNAL_TOKEN
-    _OLLAMA_URL    = cfg.ollama_url
-    _OLLAMA_MODEL  = cfg.ollama_model
-    _INTERNAL_TOKEN = cfg.internal_api_token
+    global _ANTHROPIC_API_KEY, _INTERNAL_TOKEN
+    _ANTHROPIC_API_KEY = cfg.anthropic_api_key or ""
+    _INTERNAL_TOKEN    = cfg.internal_api_token
 
     if not _INTERNAL_TOKEN:
         log.error(
@@ -352,7 +518,11 @@ def start_trigger_server(
                  "Générer avec : openssl rand -hex 32",
         )
 
+    if not _ANTHROPIC_API_KEY:
+        log.warning("trigger_server.no_anthropic_key",
+                    hint="Chat Claude indisponible — configurer ANTHROPIC_API_KEY")
+
     _TriggerHandler.scheduler = scheduler
     server = ThreadingHTTPServer(("0.0.0.0", port), _TriggerHandler)
     threading.Thread(target=server.serve_forever, name="trigger-server", daemon=True).start()
-    log.info("trigger_server.started", port=port, ollama_model=_OLLAMA_MODEL)
+    log.info("trigger_server.started", port=port, chat_backend="claude")

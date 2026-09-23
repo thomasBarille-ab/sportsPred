@@ -21,14 +21,14 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const SUGGESTIONS = [
-  "Quelles sont les performances actuelles du modèle Ligue 1 ?",
-  "Explique pourquoi le modèle est calibré ou pas",
-  "Quels sont les derniers matchs évalués ?",
-  "/ingest — récupérer les données récentes",
+  "Quels sont les prochains matchs NBA prédit cette semaine ?",
+  "Y a-t-il des value bets en ce moment ?",
+  "Comment évolue le Brier score Ligue 1 sur 30 jours ?",
+  "Quels sont les patterns d'échec du modèle NBA ?",
+  "Quel est le bilan des simulations de paris ?",
   "/predict — générer les prédictions",
   "/evaluate — scorer les prédictions",
   "/retrain — réentraîner les modèles",
-  "/summary — générer le résumé",
 ];
 
 export default function ChatPage() {
