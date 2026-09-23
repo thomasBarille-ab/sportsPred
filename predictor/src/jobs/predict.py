@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import joblib
 import numpy as np
@@ -18,6 +19,74 @@ from ..features.elo import build_elo_state, compute_elo_ratings
 log = structlog.get_logger()
 
 _DEFAULT_HORIZON_HOURS = 36
+_EXPLANATION_MODEL = "claude-haiku-4-5"
+_EXPLANATION_MAX_TOKENS = 120
+
+
+def _generate_explanation(
+    api_key: str,
+    sport: str,
+    home: str,
+    away: str,
+    predicted_outcome: str,
+    p_home: float,
+    p_draw: Optional[float],
+    p_away: float,
+    snapshot: dict,
+) -> Optional[str]:
+    """Génère une phrase d'explication via Claude Haiku. Retourne None en cas d'erreur."""
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    outcome_label = {"home": "victoire domicile", "draw": "match nul", "away": "victoire extérieur"}
+    label = outcome_label.get(predicted_outcome, predicted_outcome)
+
+    if sport == "ligue1":
+        elo_diff = int(round(snapshot.get("elo_diff", 0)))
+        dc_home = snapshot.get("dc_p_home", 0)
+        dc_draw = snapshot.get("dc_p_draw", 0)
+        dc_away = snapshot.get("dc_p_away", 0)
+        home_form = int(snapshot.get("home_form_pts_last5", 0))
+        away_form = int(snapshot.get("away_form_pts_last5", 0))
+        home_b2b = bool(snapshot.get("home_b2b", 0))
+        away_b2b = bool(snapshot.get("away_b2b", 0))
+        prompt = (
+            f"Explique en 1 phrase concise (max 80 tokens) pourquoi le modèle prédit {label} "
+            f"pour {home} vs {away}.\n"
+            f"Features : Elo diff={elo_diff:+d}, Dixon-Coles {dc_home:.0%}/{dc_draw:.0%}/{dc_away:.0%}, "
+            f"forme {home} {home_form}pts / {away} {away_form}pts, "
+            f"B2B domicile={'oui' if home_b2b else 'non'} / extérieur={'oui' if away_b2b else 'non'}.\n"
+            f"Proba : dom {p_home:.0%} / nul {p_draw:.0%} / ext {p_away:.0%}."
+        )
+    else:
+        elo_diff = int(round(snapshot.get("elo_diff", 0)))
+        h_wr = snapshot.get("home_win_rate_last10", 0)
+        a_wr = snapshot.get("away_win_rate_last10", 0)
+        home_b2b = bool(snapshot.get("home_b2b", 0))
+        away_b2b = bool(snapshot.get("away_b2b", 0))
+        prompt = (
+            f"Explique en 1 phrase concise (max 80 tokens) pourquoi le modèle prédit {label} "
+            f"pour {home} vs {away}.\n"
+            f"Features : Elo diff={elo_diff:+d}, winrate 10j {home} {h_wr:.0%} / {away} {a_wr:.0%}, "
+            f"B2B domicile={'oui' if home_b2b else 'non'} / extérieur={'oui' if away_b2b else 'non'}.\n"
+            f"Proba : dom {p_home:.0%} / ext {p_away:.0%}."
+        )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=_EXPLANATION_MODEL,
+            max_tokens=_EXPLANATION_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip()
+    except Exception as exc:
+        log.warning("predict.explanation_failed", match=f"{home} vs {away}", error=str(exc))
+        return None
 
 
 def _get_all_matches_for_sport(sport: str) -> list[dict]:
@@ -33,7 +102,7 @@ def _get_all_matches_for_sport(sport: str) -> list[dict]:
     )
 
 
-def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS) -> int:
+def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthropic_api_key: str = "") -> int:
     """Génère les prédictions pour tous les matchs futurs sans prédiction."""
     prod_model = session.fetch_one(
         "SELECT * FROM model_versions WHERE sport = %s AND is_production = TRUE LIMIT 1",
@@ -145,6 +214,12 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS) -> int:
             snapshot = dict(zip(feature_names, [round(v, 4) for v in vec]))
             confidence = float(max(proba))
 
+            explanation = _generate_explanation(
+                anthropic_api_key, sport,
+                fixture["home_team_name"], fixture["away_team_name"],
+                predicted_outcome, p_home, p_draw, p_away, snapshot,
+            )
+
             # ── Log de raisonnement ────────────────────────────────────────────
             if sport == "ligue1":
                 elo_diff = int(round(snapshot.get("elo_diff", 0)))
@@ -200,8 +275,8 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS) -> int:
                 """
                 INSERT INTO predictions
                   (fixture_id, model_version_id, prob_home_win, prob_draw,
-                   prob_away_win, predicted_outcome, features_snapshot)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                   prob_away_win, predicted_outcome, features_snapshot, explanation)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (fixture_id) DO NOTHING
                 """,
                 (
@@ -209,6 +284,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS) -> int:
                     p_home, p_draw, p_away,
                     predicted_outcome,
                     json.dumps(snapshot),
+                    explanation,
                 ),
             )
             n_predicted += 1

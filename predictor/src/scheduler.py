@@ -2,9 +2,10 @@
 
 Planification UTC :
   06:00 — ingestion Ligue 1 + NBA
-  07:00 — génération des prédictions
+  07:00 — génération des prédictions (+ explications Claude)
   08:00 — évaluation des prédictions (résultats connus)
-  09:00 — résumé Ollama
+  09:00 — analyse agent Claude (tool use, patterns d'échec)
+  10:00 — résumé Ollama
   03:00 lundi — réentraînement Ligue 1 + NBA
 """
 
@@ -23,6 +24,7 @@ from .db import session
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .jobs import evaluate, ingest, predict, retrain
+from .jobs.agent_analysis import run_agent_analysis_job
 from .log_capture import capture_steps
 from .summaries.ollama import generate_summary
 
@@ -113,12 +115,16 @@ def _job_ingest(cfg: Settings) -> None:
 
 def _job_predict(cfg: Settings) -> None:
     for sport in ("ligue1", "nba"):
-        _log_job("predict", sport, predict.run_predict, sport, cfg.predict_horizon_hours)
+        _log_job("predict", sport, predict.run_predict, sport, cfg.predict_horizon_hours, cfg.anthropic_api_key)
 
 
 def _job_evaluate() -> None:
     for sport in ("ligue1", "nba"):
         _log_job("evaluate", sport, evaluate.run_evaluate, sport)
+
+
+def _job_agent_analysis(cfg: Settings) -> None:
+    _log_job("agent_analysis", None, run_agent_analysis_job, cfg.anthropic_api_key)
 
 
 def _job_summary(cfg: Settings) -> None:
@@ -175,8 +181,14 @@ def start_scheduler(cfg: Settings) -> None:
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        lambda: _job_summary(cfg),
+        lambda: _job_agent_analysis(cfg),
         CronTrigger(hour=(h + 3) % 24, minute=0),
+        id="agent_analysis", name="Analyse agent Claude",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_summary(cfg),
+        CronTrigger(hour=(h + 4) % 24, minute=0),
         id="summary", name="Résumé Ollama",
         max_instances=1, coalesce=True,
     )

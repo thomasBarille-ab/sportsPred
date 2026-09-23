@@ -21,12 +21,79 @@ export default async function Home() {
     getLatestSummary(),
   ]);
 
+  const agentReport = summary?.agentReport as {
+    summary?: string;
+    patterns?: string[];
+    recommendations?: string[];
+    retrain_recommended?: boolean;
+    retrain_reason?: string | null;
+  } | null ?? null;
+
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-bold">Vue d&apos;ensemble</h1>
 
+      {/* ── Insights Agent Claude ────────────────────────────────────────────── */}
+      {agentReport && (
+        <div className="card border-violet-500/30 bg-violet-500/5 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-violet-400 uppercase tracking-wider">
+              Insights Agent Claude
+            </span>
+            {summary?.summaryDate && (
+              <span className="text-xs text-muted">
+                — {new Date(summary.summaryDate).toLocaleDateString("fr-FR")}
+              </span>
+            )}
+            {agentReport.retrain_recommended && (
+              <span className="ml-auto text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-medium">
+                Retrain recommandé
+              </span>
+            )}
+          </div>
+
+          {agentReport.summary && (
+            <p className="text-sm leading-relaxed text-slate-200">{agentReport.summary}</p>
+          )}
+
+          {agentReport.patterns && agentReport.patterns.length > 0 && (
+            <div>
+              <div className="text-xs text-muted mb-2 font-medium">Patterns détectés</div>
+              <ul className="space-y-1.5">
+                {agentReport.patterns.map((p, i) => (
+                  <li key={i} className="text-sm text-slate-300 flex gap-2">
+                    <span className="text-violet-400 shrink-0">›</span>
+                    <span>{p}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {agentReport.recommendations && agentReport.recommendations.length > 0 && (
+            <div>
+              <div className="text-xs text-muted mb-2 font-medium">Recommandations</div>
+              <ul className="space-y-1.5">
+                {agentReport.recommendations.map((r, i) => (
+                  <li key={i} className="text-sm text-slate-300 flex gap-2">
+                    <span className="text-emerald-400 shrink-0">→</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {agentReport.retrain_recommended && agentReport.retrain_reason && (
+            <p className="text-xs text-amber-300 bg-amber-500/10 rounded px-3 py-2">
+              {agentReport.retrain_reason}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* ── Résumé Llama ────────────────────────────────────────────────────── */}
-      {summary && (
+      {summary?.content && (
         <div className="card border-accent/40 bg-accent/5">
           <div className="text-xs text-muted mb-2">
             Résumé IA — {new Date(summary.summaryDate).toLocaleDateString("fr-FR")}

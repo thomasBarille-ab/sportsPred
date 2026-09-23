@@ -16,6 +16,7 @@ class Settings:
     log_level: str
     predict_horizon_hours: int  # horizon de prédiction en heures (défaut 36)
     internal_api_token: str
+    anthropic_api_key: str
 
 
 def _validate_hour(key: str, value: int) -> int:
@@ -43,6 +44,7 @@ def load_settings() -> Settings:
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         predict_horizon_hours=int(os.environ.get("PREDICT_HORIZON_HOURS", "36")),
         internal_api_token=os.environ.get("INTERNAL_API_TOKEN", ""),
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
     )
 
 

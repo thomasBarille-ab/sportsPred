@@ -58,7 +58,8 @@ export default async function NbaPage() {
                 <th className="text-center py-2 pr-6">Prédit</th>
                 <th className="text-left py-2 pr-6">Probabilités</th>
                 <th className="text-center py-2 pr-4">Résultat</th>
-                <th className="text-right py-2">Brier</th>
+                <th className="text-right py-2 pr-4">Brier</th>
+                <th className="text-left py-2">Analyse</th>
               </tr>
             </thead>
             <tbody>
@@ -124,8 +125,11 @@ export default async function NbaPage() {
                         <span className="text-muted text-xs">À jouer</span>
                       )}
                     </td>
-                    <td className="py-2.5 text-right text-muted text-xs font-mono tabular-nums">
+                    <td className="py-2.5 pr-4 text-right text-muted text-xs font-mono tabular-nums">
                       {r.brierScore != null ? Number(r.brierScore).toFixed(4) : "—"}
+                    </td>
+                    <td className="py-2.5 text-xs text-slate-400 max-w-xs">
+                      {r.explanation ?? <span className="text-muted/40">—</span>}
                     </td>
                   </tr>
                 );

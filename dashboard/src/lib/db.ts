@@ -79,7 +79,8 @@ export async function getRecentPredictions(sport: string, limit = 20) {
       ROUND(p.prob_away_win::numeric, 2) AS prob_away,
       r.actual_outcome,
       ps.is_correct,
-      ROUND(ps.brier_score::numeric, 4)  AS brier_score
+      ROUND(ps.brier_score::numeric, 4)  AS brier_score,
+      p.explanation
     FROM predictions p
     JOIN fixtures f ON f.id = p.fixture_id
     LEFT JOIN results r ON r.fixture_id = p.fixture_id
@@ -138,7 +139,7 @@ export async function getMatchdaySummary(sport: string) {
 
 export async function getLatestSummary() {
   const rows = await sql`
-    SELECT content, summary_date, generated_at
+    SELECT content, summary_date, generated_at, agent_report
     FROM daily_summaries
     ORDER BY summary_date DESC
     LIMIT 1
