@@ -44,6 +44,7 @@ def run_evaluate(sport: str) -> int:
     if not rows:
         log.info("evaluate.rien_à_faire", sport=sport,
                  reason="Aucune prédiction en attente de résultat")
+        _settle_bets(sport)
         return 0
 
     n_scored = n_correct = n_wrong = 0
