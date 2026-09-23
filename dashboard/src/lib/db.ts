@@ -226,3 +226,15 @@ export async function getLatestSummary() {
   `;
   return rows[0] ?? null;
 }
+
+export async function getFeatureImportances(sport: string) {
+  return sql`
+    SELECT fi.feature_name, fi.importance
+    FROM feature_importances fi
+    JOIN model_versions mv ON mv.id = fi.model_version_id
+    WHERE fi.sport = ${sport}
+      AND mv.is_production = true
+    ORDER BY fi.importance DESC
+    LIMIT 30
+  `.catch(() => [] as { feature_name: string; importance: number }[]);
+}

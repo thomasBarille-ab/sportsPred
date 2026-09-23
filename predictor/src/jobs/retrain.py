@@ -200,6 +200,25 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         hyperparameters=hyperparams,
     )
 
+    # Sauvegarde des importances de features
+    try:
+        import psycopg2.extras
+        importances = result.model.feature_importances_
+        rows = [
+            (version_id, sport, name, float(imp))
+            for name, imp in zip(result.feature_names, importances)
+        ]
+        with session.get_conn() as conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO feature_importances (model_version_id, sport, feature_name, importance) VALUES %s",
+                    rows,
+                )
+        log.info("retrain.feature_importances_saved", sport=sport, n=len(rows))
+    except Exception as exc:
+        log.warning("retrain.feature_importances_failed", sport=sport, error=str(exc))
+
     # Si le champion est legacy → challenger promu automatiquement
     effective_champion_brier = (
         champion_brier_on_same_holdout

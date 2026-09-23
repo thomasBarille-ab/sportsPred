@@ -111,8 +111,8 @@ def _build_metrics_snapshot() -> dict:
     return result
 
 
-def _job_bet_simulation() -> None:
-    _log_job("bet_simulation", None, run_bet_simulation)
+def _job_bet_simulation(cfg: Settings) -> None:
+    _log_job("bet_simulation", None, run_bet_simulation, cfg.discord_webhook_url)
 
 
 
@@ -176,6 +176,32 @@ def _job_retrain(cfg: Settings) -> None:
         _log_job("retrain", sport, retrain.run_retrain, sport, cfg.model_storage_path)
 
 
+def _check_drift_and_retrain(cfg: Settings) -> None:
+    """Déclenche un retrain anticipé si les 2 derniers rapports d'agent recommandent un retrain."""
+    rows = session.fetch_all(
+        """
+        SELECT agent_report
+        FROM daily_summaries
+        WHERE agent_report IS NOT NULL
+        ORDER BY summary_date DESC
+        LIMIT 2
+        """
+    )
+    if len(rows) < 2:
+        return
+    recommended = [
+        bool(r["agent_report"].get("retrain_recommended"))
+        for r in rows
+        if isinstance(r["agent_report"], dict)
+    ]
+    if len(recommended) >= 2 and all(recommended[:2]):
+        log.warning(
+            "drift.retrain_triggered",
+            reason="2 rapports consécutifs recommandent un retrain",
+        )
+        _job_retrain(cfg)
+
+
 def start_scheduler(cfg: Settings) -> None:
     scheduler = BlockingScheduler(timezone="UTC")
 
@@ -199,7 +225,7 @@ def start_scheduler(cfg: Settings) -> None:
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        _job_bet_simulation,
+        lambda: _job_bet_simulation(cfg),
         CronTrigger(hour=(h + 1) % 24, minute=10),
         id="bet_simulation", name="Simulation de paris (EV)",
         max_instances=1, coalesce=True,
@@ -232,6 +258,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_odds_backfill(cfg),
         CronTrigger(month=1, day=1, hour=3, minute=0),
         id="odds_backfill", name="Backfill historique cotes (one-shot manuel)",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _check_drift_and_retrain(cfg),
+        CronTrigger(hour=12, minute=0),
+        id="drift_check", name="Vérification dérive modèle (retrain anticipé)",
         max_instances=1, coalesce=True,
     )
 

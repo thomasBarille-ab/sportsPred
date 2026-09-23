@@ -87,6 +87,7 @@ services:
       PREDICTOR_URL: http://predictor:8080
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ODDS_API_KEY: ${ODDS_API_KEY:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     volumes:
       - predictor_models:/models
     networks:

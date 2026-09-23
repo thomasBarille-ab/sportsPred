@@ -57,38 +57,87 @@ export default function ChatPage() {
     setInput("");
     setLoading(true);
 
-    // Historique envoyé à l'API (rôles user/assistant uniquement)
     const history = messages
       .filter((m) => !m.error)
       .map(({ role, content }) => ({ role, content }));
 
+    // Placeholder for streaming response
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+        },
         body: JSON.stringify({ message: content, history }),
       });
-      const data = await res.json();
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({ error: "Erreur inconnue" }));
         setMessages((prev) => [
-          ...prev,
+          ...prev.slice(0, -1),
           { role: "assistant", content: data.error ?? "Erreur inconnue", error: true },
         ]);
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: data.response,
-            action: data.action,
-            action_note: data.action_note,
-          },
-        ]);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalAction: string | null = null;
+      let finalActionNote: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+
+          let evt: Record<string, unknown>;
+          try { evt = JSON.parse(raw); } catch { continue; }
+
+          if (typeof evt.chunk === "string") {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + evt.chunk,
+              };
+              return updated;
+            });
+          }
+
+          if (evt.done) {
+            finalAction = (evt.action as string) ?? null;
+            finalActionNote = (evt.action_note as string) ?? null;
+          }
+        }
+      }
+
+      if (finalAction !== null || finalActionNote !== null) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            action: finalAction,
+            action_note: finalActionNote,
+          };
+          return updated;
+        });
       }
     } catch (err) {
       setMessages((prev) => [
-        ...prev,
+        ...prev.slice(0, -1),
         { role: "assistant", content: `Erreur réseau : ${err}`, error: true },
       ]);
     } finally {
@@ -140,24 +189,16 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Texte avec sauts de ligne */}
-              <div className="whitespace-pre-wrap">{msg.content}</div>
-            </div>
-          </div>
-        ))}
-
-        {/* Indicateur de chargement */}
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-card border border-border rounded-2xl px-4 py-3">
-              <div className="flex gap-1 items-center h-4">
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce [animation-delay:0ms]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce [animation-delay:150ms]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce [animation-delay:300ms]" />
+              {/* Texte avec sauts de ligne + curseur pendant streaming */}
+              <div className="whitespace-pre-wrap">
+                {msg.content}
+                {msg.role === "assistant" && loading && i === messages.length - 1 && (
+                  <span className="inline-block w-0.5 h-3.5 bg-slate-400 animate-pulse ml-0.5 align-text-bottom" />
+                )}
               </div>
             </div>
           </div>
-        )}
+        ))}
 
         <div ref={bottomRef} />
       </div>

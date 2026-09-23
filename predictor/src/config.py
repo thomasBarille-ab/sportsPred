@@ -18,6 +18,7 @@ class Settings:
     internal_api_token: str
     anthropic_api_key: str
     odds_api_key: str
+    discord_webhook_url: str
 
 
 def _validate_hour(key: str, value: int) -> int:
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
         internal_api_token=os.environ.get("INTERNAL_API_TOKEN", ""),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         odds_api_key=os.environ.get("ODDS_API_KEY", ""),
+        discord_webhook_url=os.environ.get("DISCORD_WEBHOOK_URL", ""),
     )
 
 

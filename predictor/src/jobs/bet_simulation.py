@@ -15,7 +15,8 @@ from ..db import session
 
 log = structlog.get_logger()
 
-_MIN_EV_PCT = 0.0  # seuil minimal pour créer une simulation
+_MIN_EV_PCT = 0.0   # seuil minimal pour créer une simulation
+_DISCORD_EV_THRESHOLD = 0.08  # EV >= 8% → alerte Discord
 
 
 def _best_ev(
@@ -77,12 +78,28 @@ def _fetch_candidates() -> list[dict]:
     )
 
 
-def run_bet_simulation() -> dict:
+def _send_discord_alert(webhook_url: str, row: dict, bet_outcome: str, odds: float, ev_pct: float) -> None:
+    """Envoie une alerte Discord pour un value bet significatif."""
+    import httpx
+    sport_label = "⚽ Ligue 1" if row["sport"] == "ligue1" else "🏀 NBA"
+    outcome_label = {"home": "Victoire domicile", "draw": "Match nul", "away": "Victoire extérieur"}.get(bet_outcome, bet_outcome)
+    content = (
+        f"**Value Bet détecté** — {sport_label}\n"
+        f"Fixture #{row['fixture_id']} · {outcome_label}\n"
+        f"Cote : **{odds:.2f}** · EV : **{ev_pct:+.1%}** · Bookmaker : {row['bookmaker']}"
+    )
+    try:
+        httpx.post(webhook_url, json={"content": content}, timeout=5)
+    except Exception as exc:
+        log.warning("bet_simulation.discord_error", error=str(exc))
+
+
+def run_bet_simulation(discord_webhook_url: str = "") -> dict:
     """Génère les simulations de paris pour les prédictions des 48 dernières heures."""
-    return _run()
+    return _run(discord_webhook_url)
 
 
-def _run() -> dict:
+def _run(discord_webhook_url: str = "") -> dict:
     rows = _fetch_candidates()
 
     log.info("bet_simulation.start", candidats=len(rows))
@@ -135,6 +152,8 @@ def _run() -> dict:
                     ev_pct=f"{ev_pct:.1%}",
                     bookmaker=row["bookmaker"],
                 )
+                if discord_webhook_url and ev_pct >= _DISCORD_EV_THRESHOLD:
+                    _send_discord_alert(discord_webhook_url, row, bet_outcome, odds_taken, ev_pct)
         except Exception as exc:
             log.error("bet_simulation.insert_error",
                       fixture_id=row["fixture_id"], error=str(exc))

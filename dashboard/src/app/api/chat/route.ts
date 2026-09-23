@@ -26,17 +26,31 @@ export async function POST(req: NextRequest) {
   }
 
   const safeMessage = message.trim().slice(0, 2000);
+  const wantsStream = req.headers.get("Accept") === "text/event-stream";
+
+  const upstreamHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Internal-Token": INTERNAL_TOKEN,
+  };
+  if (wantsStream) upstreamHeaders["Accept"] = "text/event-stream";
 
   try {
     const res = await fetch(`${PREDICTOR_URL}/chat`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Token": INTERNAL_TOKEN,
-      },
+      headers: upstreamHeaders,
       body: JSON.stringify({ message: safeMessage, history }),
-      signal: AbortSignal.timeout(130_000),
+      signal: wantsStream ? undefined : AbortSignal.timeout(130_000),
     });
+
+    if (wantsStream) {
+      return new Response(res.body, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      });
+    }
 
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });

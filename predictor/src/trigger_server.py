@@ -310,6 +310,63 @@ def _execute_chat_tool(name: str, inputs: dict) -> Any:
 
 # ── Agent Claude conversationnel ──────────────────────────────────────────────
 
+def _run_tool_loop(client: Any, messages: list[dict]) -> list[dict]:
+    """Exécute la boucle tool use (non-streaming). Retourne messages mis à jour."""
+    for _ in range(_CHAT_MAX_TURNS - 1):
+        resp = client.messages.create(
+            model=_CHAT_MODEL,
+            max_tokens=256,
+            system=_CHAT_SYSTEM,
+            tools=_CHAT_TOOLS,
+            messages=messages,
+        )
+        if resp.stop_reason != "tool_use":
+            break
+        messages.append({"role": "assistant", "content": resp.content})
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use":
+                log.info("chat.tool_call", tool=block.name)
+                result = _execute_chat_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, default=_serialize),
+                })
+        messages.append({"role": "user", "content": tool_results})
+    return messages
+
+
+def _stream_claude_agent(message: str, history: list[dict], send_event: Any) -> None:
+    """Agent Claude avec tool use (non-streaming) + réponse finale streamée."""
+    if not _ANTHROPIC_API_KEY:
+        send_event({"chunk": "[ANTHROPIC_API_KEY non configurée]"})
+        return
+    try:
+        import anthropic
+    except ImportError:
+        send_event({"chunk": "[Package anthropic non installé]"})
+        return
+
+    client = anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
+    messages: list[dict] = list(history[-8:]) + [{"role": "user", "content": message}]
+
+    try:
+        messages = _run_tool_loop(client, messages)
+        # Réponse finale streamée (sans tools = texte garanti)
+        with client.messages.stream(
+            model=_CHAT_MODEL,
+            max_tokens=_CHAT_MAX_TOKENS,
+            system=_CHAT_SYSTEM,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                send_event({"chunk": text})
+    except Exception as exc:
+        log.error("chat.stream_error", error=str(exc))
+        send_event({"chunk": f"\n[Erreur : {exc}]"})
+
+
 def _call_claude_agent(message: str, history: list[dict]) -> str:
     if not _ANTHROPIC_API_KEY:
         return "[ANTHROPIC_API_KEY non configurée — chat Claude indisponible]"
@@ -488,13 +545,29 @@ class _TriggerHandler(BaseHTTPRequestHandler):
                     action_note = "job lancé en arrière-plan"
                     log.info("chat.command_triggered", action=job_id)
 
-        response = _call_claude_agent(message, history)
+        wants_stream = "text/event-stream" in self.headers.get("Accept", "")
 
-        _send_json(self, 200, {
-            "response": response,
-            "action": action,
-            "action_note": action_note,
-        })
+        if wants_stream:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def send_event(data: dict) -> None:
+                line = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                self.wfile.write(line.encode("utf-8"))
+                self.wfile.flush()
+
+            _stream_claude_agent(message, history, send_event)
+            send_event({"done": True, "action": action, "action_note": action_note})
+        else:
+            response = _call_claude_agent(message, history)
+            _send_json(self, 200, {
+                "response": response,
+                "action": action,
+                "action_note": action_note,
+            })
 
     def log_message(self, *_: object) -> None:
         pass
