@@ -50,7 +50,7 @@ HYPERPARAMS_NBA: dict = {
     "colsample_bytree": 0.8,
 }
 
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 
 @dataclass
@@ -152,6 +152,7 @@ def _build_rows_walkforward(
     dc_last_refit: list,  # [datetime | None]
     dc_x0: list,  # [np.ndarray | None]
     all_past_fn,  # callable(i) -> list[dict] des matchs passés
+    odds_by_fixture: dict[int, tuple] | None = None,
 ) -> tuple[list[list[float]], list[int], list[datetime]]:
     """Construit les features en walk-forward (Elo et DC mis à jour après chaque match)."""
     X, y, dates = [], [], []
@@ -176,18 +177,26 @@ def _build_rows_walkforward(
 
         past = all_past_fn(i)
         try:
+            fixture_id = m.get("id")
+            odds = (odds_by_fixture or {}).get(fixture_id) if fixture_id else None
+            odds_home = odds[0] if odds else None
+            odds_draw = odds[1] if odds else None
+            odds_away = odds[2] if odds else None
+
             if sport == "ligue1":
                 dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
                 vec, _ = build_features_ligue1(
                     m["home_team_id"], m["away_team_id"],
                     m["match_date"], past,
                     elo_state, dc,
+                    odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
                 )
             else:
                 vec, _ = build_features_nba(
                     m["home_team_id"], m["away_team_id"],
                     m["match_date"], past,
                     elo_state,
+                    odds_home=odds_home, odds_away=odds_away,
                 )
         except Exception:
             # Met quand même à jour l'Elo avant de passer à la suite
@@ -213,6 +222,7 @@ def train_model(
     all_matches: list[dict],
     model_storage_path: str,
     holdout_fraction: float = 0.15,
+    odds_by_fixture: dict[int, tuple] | None = None,
 ) -> TrainResult:
     """Entraîne un nouveau modèle et retourne les métriques sur le holdout.
 
@@ -241,6 +251,7 @@ def train_model(
         train_matches, sport,
         elo_state, dc_state, dc_last_refit, dc_x0,
         all_past_fn=lambda i: train_matches[:i],
+        odds_by_fixture=odds_by_fixture,
     )
 
     # ── Walk-forward Elo + DC sur le holdout (continuation) ──────────────────
@@ -248,6 +259,7 @@ def train_model(
         test_matches, sport,
         elo_state, dc_state, dc_last_refit, dc_x0,
         all_past_fn=lambda i: train_matches + test_matches[:i],
+        odds_by_fixture=odds_by_fixture,
     )
 
     if len(X_train) < 40 or len(X_test) < 5:
@@ -279,6 +291,7 @@ def train_model(
         finished, sport,
         elo_final, dc_final, dc_lrf, dc_x0f,
         all_past_fn=lambda i: finished[:i],
+        odds_by_fixture=odds_by_fixture,
     )
 
     X_full_np = np.array(X_full)

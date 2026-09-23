@@ -92,8 +92,9 @@ def _generate_explanation(
 def _get_all_matches_for_sport(sport: str) -> list[dict]:
     return session.fetch_all(
         """
-        SELECT f.home_team_id, f.away_team_id, f.match_date,
-               f.home_score, f.away_score, f.status
+        SELECT f.id, f.home_team_id, f.away_team_id, f.match_date,
+               f.home_score, f.away_score, f.status,
+               f.home_xg, f.away_xg
         FROM fixtures f
         WHERE f.sport = %s
         ORDER BY f.match_date
@@ -171,6 +172,24 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                  reason="Tous les matchs à venir ont déjà une prédiction verrouillée")
         return 0
 
+    # Charge les cotes disponibles pour les fixtures à prédire (Pinnacle en priorité)
+    unpredicted_ids = [f["id"] for f in unpredicted]
+    odds_by_fixture: dict[int, tuple] = {}
+    if unpredicted_ids:
+        odds_rows = session.fetch_all(
+            """
+            SELECT DISTINCT ON (fixture_id) fixture_id, odds_home, odds_draw, odds_away
+            FROM match_odds
+            WHERE fixture_id = ANY(%s)
+            ORDER BY fixture_id,
+              CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+              fetched_at DESC
+            """,
+            (unpredicted_ids,),
+        )
+        for r in odds_rows:
+            odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
+
     n_predicted = 0
     # Utilise uniquement les matchs terminés comme historique pour les features
     finished_list = [m for m in all_matches if m.get("home_score") is not None]
@@ -181,12 +200,18 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             if match_date.tzinfo is None:
                 match_date = match_date.replace(tzinfo=timezone.utc)
 
+            fixture_odds = odds_by_fixture.get(fixture["id"])
+            odds_home = fixture_odds[0] if fixture_odds else None
+            odds_draw = fixture_odds[1] if fixture_odds else None
+            odds_away = fixture_odds[2] if fixture_odds else None
+
             if sport == "ligue1":
                 vec, _ = build_features_ligue1(
                     fixture["home_team_id"], fixture["away_team_id"],
                     match_date, finished_list,
                     elo_state, dc_model,
                     schedule=schedule,
+                    odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
                 )
             else:
                 vec, _ = build_features_nba(
@@ -194,6 +219,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     match_date, finished_list,
                     elo_state,
                     schedule=schedule,
+                    odds_home=odds_home, odds_away=odds_away,
                 )
 
             X     = np.array([vec])

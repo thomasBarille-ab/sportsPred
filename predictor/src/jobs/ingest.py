@@ -43,6 +43,51 @@ def _upsert_fixture(fx: FixtureDTO) -> None:
     )
 
 
+def _enrich_xg_ligue1() -> int:
+    """Récupère les xG Understat pour la saison en cours et met à jour les fixtures.
+
+    Ne lève pas d'exception — un échec Understat ne bloque pas l'ingestion.
+    Retourne le nombre de fixtures enrichies.
+    """
+    from datetime import datetime
+    try:
+        from ..ingestion.understat import fetch_season_xg, match_xg_to_fixtures
+
+        current_year = datetime.now().year
+        # La saison en cours commence en été : si on est avant juillet, la saison a démarré l'an dernier
+        start_year = current_year if datetime.now().month >= 7 else current_year - 1
+
+        xg_rows = fetch_season_xg(start_year)
+        if not xg_rows:
+            return 0
+
+        fixtures = session.fetch_all(
+            """
+            SELECT id, home_team_name, away_team_name, match_date
+            FROM fixtures
+            WHERE sport = 'ligue1' AND home_score IS NOT NULL
+              AND match_date >= %s
+            """,
+            (f"{start_year}-07-01",),
+        )
+
+        matches_map = match_xg_to_fixtures(xg_rows, fixtures)
+        n_updated = 0
+        for fixture_id, (home_xg, away_xg) in matches_map.items():
+            session.execute(
+                "UPDATE fixtures SET home_xg = %s, away_xg = %s WHERE id = %s AND (home_xg IS NULL OR away_xg IS NULL)",
+                (home_xg, away_xg, fixture_id),
+            )
+            n_updated += 1
+
+        log.info("ingest.xg_enriched", n_updated=n_updated, season=f"{start_year}-{start_year + 1}")
+        return n_updated
+
+    except Exception as exc:
+        log.warning("ingest.xg_failed", error=str(exc), hint="Understat peut être inaccessible")
+        return 0
+
+
 def run_ingest(provider: DataProvider, sport: str) -> dict:
     today = date.today()
     from_date = today - timedelta(days=7)
@@ -120,7 +165,11 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
             log.error("ingest.error", sport=sport, error=str(exc))
         raise
 
-    return {"upcoming": n_upcoming, "results": n_results}
+    n_xg = 0
+    if sport == "ligue1":
+        n_xg = _enrich_xg_ligue1()
+
+    return {"upcoming": n_upcoming, "results": n_results, "xg_updated": n_xg}
 
 
 def run_historical_ingest(provider: DataProvider, sport: str, seasons: list[str]) -> int:

@@ -48,11 +48,11 @@ def _score_champion_on_holdout(
         return None
 
     # Vérifie la version du pipeline
-    if artifact.get("pipeline_version", 0) < 2:
+    if artifact.get("pipeline_version", 0) < 3:
         log.info(
             "retrain.champion_legacy",
             sport=sport,
-            reason="pipeline_version < 2 — considéré comme legacy, promotion automatique du challenger",
+            reason="pipeline_version < 3 — considéré comme legacy, promotion automatique du challenger",
         )
         return None
 
@@ -86,14 +86,32 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
 
     all_matches = session.fetch_all(
         """
-        SELECT f.home_team_id, f.away_team_id, f.match_date,
-               f.home_score, f.away_score, f.season
+        SELECT f.id, f.home_team_id, f.away_team_id, f.match_date,
+               f.home_score, f.away_score, f.season,
+               f.home_xg, f.away_xg
         FROM fixtures f
         WHERE f.sport = %s AND f.home_score IS NOT NULL
         ORDER BY f.match_date
         """,
         (sport,),
     )
+
+    fixture_ids = [m["id"] for m in all_matches]
+    odds_by_fixture: dict[int, tuple] = {}
+    if fixture_ids:
+        odds_rows = session.fetch_all(
+            """
+            SELECT DISTINCT ON (fixture_id) fixture_id, odds_home, odds_draw, odds_away
+            FROM match_odds
+            WHERE fixture_id = ANY(%s)
+            ORDER BY fixture_id,
+              CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+              fetched_at DESC
+            """,
+            (fixture_ids,),
+        )
+        for r in odds_rows:
+            odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
 
     log.info(
         "retrain.données",
@@ -120,6 +138,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
             sport=sport,
             all_matches=all_matches,
             model_storage_path=model_storage_path,
+            odds_by_fixture=odds_by_fixture,
         )
     except ValueError as exc:
         log.error("retrain.échec_entraînement", sport=sport, erreur=str(exc))

@@ -1,20 +1,23 @@
 """Construit le vecteur de features pour un match donné.
 
-Ligue 1 features :
+Ligue 1 features (23) :
   elo_home, elo_away, elo_diff,
-  dc_lam (expected home goals), dc_mu (expected away goals),
+  dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
   home_ppg_last5, home_conceded_last5, home_form_pts_last5,
   away_ppg_last5, away_conceded_last5, away_form_pts_last5,
   h2h_home_wins, h2h_draws, h2h_away_wins,
-  days_since_home_game, days_since_away_game
+  days_since_home_game, days_since_away_game,
+  home_xg_last5, home_xga_last5, away_xg_last5, away_xga_last5,  [Understat]
+  implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
 
-NBA features :
+NBA features (18) :
   elo_home, elo_away, elo_diff,
   home_ppg_last10, home_oppg_last10, home_win_rate_last10, home_b2b,
   away_ppg_last10, away_oppg_last10, away_win_rate_last10, away_b2b,
   h2h_home_wins, h2h_away_wins,
-  days_since_home_game, days_since_away_game
+  days_since_home_game, days_since_away_game,
+  implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ LIGUE1_FEATURES = [
     "away_ppg_last5", "away_conceded_last5", "away_form_pts_last5",
     "h2h_home_wins", "h2h_draws", "h2h_away_wins",
     "days_since_home_game", "days_since_away_game",
+    "home_xg_last5", "home_xga_last5", "away_xg_last5", "away_xga_last5",
+    "implied_prob_home", "implied_prob_draw", "implied_prob_away", "market_efficiency",
 ]
 
 NBA_FEATURES = [
@@ -49,6 +54,7 @@ NBA_FEATURES = [
     "away_ppg_last10", "away_oppg_last10", "away_win_rate_last10", "away_b2b",
     "h2h_home_wins", "h2h_away_wins",
     "days_since_home_game", "days_since_away_game",
+    "implied_prob_home", "implied_prob_away", "market_efficiency",
 ]
 
 
@@ -58,12 +64,6 @@ def _days_since_last_game(
     all_matches: list[dict],
     schedule: list[dict] | None = None,
 ) -> float:
-    """Jours depuis le dernier match.
-
-    Si `schedule` est fourni, utilise le calendrier complet (hors CANCELLED/POSTPONED)
-    pour refléter le vrai repos — y compris les matchs planifiés non encore joués.
-    Sinon, ne considère que les matchs terminés (comportement original).
-    """
     if schedule is not None:
         return days_since_last_scheduled_game(team_id, match_date, schedule)
     games = [
@@ -79,19 +79,18 @@ def _days_since_last_game(
 
 
 def _rolling_pts_last5(team_id: str, match_date: datetime, all_matches: list[dict]) -> tuple[float, float, float]:
-    """Retourne (ppg_scored, ppg_conceded, form_points) sur les 5 derniers matchs (foot)."""
-    games_foot = [
+    games = [
         m for m in all_matches
         if (m["home_team_id"] == team_id or m["away_team_id"] == team_id)
         and m["match_date"] < match_date
         and m.get("home_score") is not None
     ]
-    games_foot = sorted(games_foot, key=lambda x: x["match_date"], reverse=True)[:5]
-    if not games_foot:
+    games = sorted(games, key=lambda x: x["match_date"], reverse=True)[:5]
+    if not games:
         return 1.3, 1.3, 5.0
 
     scored = conceded = pts = 0.0
-    for m in games_foot:
+    for m in games:
         is_home = m["home_team_id"] == team_id
         gs = m["home_score"] if is_home else m["away_score"]
         gc = m["away_score"] if is_home else m["home_score"]
@@ -100,8 +99,72 @@ def _rolling_pts_last5(team_id: str, match_date: datetime, all_matches: list[dic
         if gs > gc: pts += 3
         elif gs == gc: pts += 1
 
-    n = len(games_foot)
+    n = len(games)
     return scored / n, conceded / n, pts
+
+
+def _rolling_xg_last5(
+    team_id: str,
+    match_date: datetime,
+    all_matches: list[dict],
+) -> tuple[float, float]:
+    """Retourne (xg_scored_avg, xg_conceded_avg) sur les 5 derniers matchs.
+
+    Utilise home_xg / away_xg depuis all_matches. Retourne np.nan si aucune donnée.
+    """
+    games = [
+        m for m in all_matches
+        if (m["home_team_id"] == team_id or m["away_team_id"] == team_id)
+        and m["match_date"] < match_date
+        and m.get("home_score") is not None
+        and m.get("home_xg") is not None
+        and m.get("away_xg") is not None
+    ]
+    games = sorted(games, key=lambda x: x["match_date"], reverse=True)[:5]
+    if not games:
+        return float("nan"), float("nan")
+
+    xg_scored = xg_conceded = 0.0
+    for m in games:
+        is_home = m["home_team_id"] == team_id
+        xg_scored   += float(m["home_xg"] if is_home else m["away_xg"])
+        xg_conceded += float(m["away_xg"] if is_home else m["home_xg"])
+
+    n = len(games)
+    return xg_scored / n, xg_conceded / n
+
+
+def _implied_probs_ligue1(
+    odds_home: float | None,
+    odds_draw: float | None,
+    odds_away: float | None,
+) -> tuple[float, float, float, float]:
+    """Retourne (implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency).
+
+    market_efficiency = overround (somme des probabilités brutes avant normalisation).
+    Un overround de 1.05 = marge bookmaker de 5 %.
+    Retourne nan si cotes absentes ou invalides.
+    """
+    if odds_home and odds_draw and odds_away and odds_home > 1 and odds_draw > 1 and odds_away > 1:
+        inv_h = 1.0 / odds_home
+        inv_d = 1.0 / odds_draw
+        inv_a = 1.0 / odds_away
+        overround = inv_h + inv_d + inv_a
+        return inv_h / overround, inv_d / overround, inv_a / overround, overround
+    return float("nan"), float("nan"), float("nan"), float("nan")
+
+
+def _implied_probs_nba(
+    odds_home: float | None,
+    odds_away: float | None,
+) -> tuple[float, float, float]:
+    """Retourne (implied_prob_home, implied_prob_away, market_efficiency)."""
+    if odds_home and odds_away and odds_home > 1 and odds_away > 1:
+        inv_h = 1.0 / odds_home
+        inv_a = 1.0 / odds_away
+        overround = inv_h + inv_a
+        return inv_h / overround, inv_a / overround, overround
+    return float("nan"), float("nan"), float("nan")
 
 
 def build_features_ligue1(
@@ -112,11 +175,14 @@ def build_features_ligue1(
     elo_state: EloState,
     dc_model: DCModel,
     schedule: list[dict] | None = None,
+    odds_home: Optional[float] = None,
+    odds_draw: Optional[float] = None,
+    odds_away: Optional[float] = None,
 ) -> tuple[list[float], list[str]]:
     """Retourne (feature_vector, feature_names).
 
-    `schedule` : calendrier complet (fixtures planifiées, hors CANCELLED/POSTPONED)
-    pour le calcul du repos. Par défaut utilise all_matches (matchs terminés seulement).
+    odds_* : cotes décimales du bookmaker le plus sharp disponible (Pinnacle > Bet365).
+             None si pas de cotes en base → NaN dans le vecteur (XGBoost gère nativement).
     """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
@@ -134,6 +200,11 @@ def build_features_ligue1(
     days_h = _days_since_last_game(home_team_id, match_date, all_matches, schedule)
     days_a = _days_since_last_game(away_team_id, match_date, all_matches, schedule)
 
+    h_xg, h_xga = _rolling_xg_last5(home_team_id, match_date, all_matches)
+    a_xg, a_xga = _rolling_xg_last5(away_team_id, match_date, all_matches)
+
+    imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         lam, mu,
@@ -142,6 +213,8 @@ def build_features_ligue1(
         a_ppg, a_con, a_pts,
         h2h["h2h_home_wins"], h2h["h2h_draws"], h2h["h2h_away_wins"],
         days_h, days_a,
+        h_xg, h_xga, a_xg, a_xga,
+        imp_h, imp_d, imp_a, overround,
     ]
     return vec, LIGUE1_FEATURES
 
@@ -153,11 +226,12 @@ def build_features_nba(
     all_matches: list[dict],
     elo_state: EloState,
     schedule: list[dict] | None = None,
+    odds_home: Optional[float] = None,
+    odds_away: Optional[float] = None,
 ) -> tuple[list[float], list[str]]:
     """Retourne (feature_vector, feature_names).
 
-    `schedule` : calendrier complet pour le calcul du repos/B2B.
-    Par défaut utilise all_matches.
+    odds_* : cotes décimales. None → NaN.
     """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
@@ -168,11 +242,14 @@ def build_features_nba(
     days_h = _days_since_last_game(home_team_id, match_date, all_matches, schedule)
     days_a = _days_since_last_game(away_team_id, match_date, all_matches, schedule)
 
+    imp_h, imp_a, overround = _implied_probs_nba(odds_home, odds_away)
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         h_stats["ppg"], h_stats["oppg"], h_stats["win_rate"], h_stats["is_back2back"],
         a_stats["ppg"], a_stats["oppg"], a_stats["win_rate"], a_stats["is_back2back"],
         h2h["h2h_home_wins"], h2h["h2h_away_wins"],
         days_h, days_a,
+        imp_h, imp_a, overround,
     ]
     return vec, NBA_FEATURES
