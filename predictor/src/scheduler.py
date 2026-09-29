@@ -146,7 +146,9 @@ def _job_predict(cfg: Settings) -> None:
     if cfg.apifootball_api_key:
         sports.append("france_nt")
     for sport in sports:
-        _log_job("predict", sport, predict.run_predict, sport, cfg.predict_horizon_hours, cfg.anthropic_api_key)
+        # france_nt : horizon 10 jours — les matchs NT arrivent 1x/mois, on prédit dès que la fixture est en DB
+        horizon = 240 if sport == "france_nt" else cfg.predict_horizon_hours
+        _log_job("predict", sport, predict.run_predict, sport, horizon, cfg.anthropic_api_key)
 
 
 def _job_evaluate() -> None:

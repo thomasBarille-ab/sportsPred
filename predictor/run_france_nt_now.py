@@ -66,19 +66,17 @@ if count and count["n"] == 0:
 else:
     log.info("backfill.skip", fixtures_existants=count["n"] if count else 0)
 
-# ── 3. Ingest fixtures à venir ────────────────────────────────────────────────
-if not cfg.apifootball_api_key:
-    log.warning("ingest.skip", reason="APIFOOTBALL_API_KEY non configuré")
-else:
-    log.info("ingest.start")
-    from src.ingestion.france_nt import FranceNTProvider
-    from src.jobs.ingest import run_france_nt_ingest_and_lineups
-    provider = FranceNTProvider(cfg.apifootball_api_key)
-    try:
-        result = run_france_nt_ingest_and_lineups(provider, "france_nt")
-        log.info("ingest.done", **result)
-    except Exception as exc:
-        log.warning("ingest.failed", error=str(exc))
+# ── 3. Ingest fixtures à venir (API-Football ou TheSportsDB en fallback) ──────
+log.info("ingest.start")
+from src.ingestion.france_nt import FranceNTProvider
+from src.jobs.ingest import run_france_nt_ingest_and_lineups
+api_key = cfg.apifootball_api_key or ""
+provider = FranceNTProvider(api_key)
+try:
+    result = run_france_nt_ingest_and_lineups(provider, "france_nt")
+    log.info("ingest.done", **result)
+except Exception as exc:
+    log.warning("ingest.failed", error=str(exc))
 
 # ── 4. Retrain si aucun modèle en production ──────────────────────────────────
 prod_model = session.fetch_one(

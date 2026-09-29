@@ -2,6 +2,9 @@
 
 France national team ID (API-Football) : 2.
 external_id format : 'apf_{fixture_id}'.
+
+Fallback : si API-Football retourne une erreur d'authentification,
+TheSportsDB (gratuit, sans clé) est utilisé pour les fixtures à venir.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import structlog
 
 from .api_football import ApiFootballClient, FRANCE_TEAM_ID
 from .base import DataProvider, FixtureDTO, ResultDTO
+from .thesportsdb import TheSportsDBClient
 
 log = structlog.get_logger()
 
@@ -94,22 +98,59 @@ def extract_apf_id(external_id: str) -> Optional[int]:
 class FranceNTProvider(DataProvider):
     def __init__(self, api_key: str) -> None:
         self._client = ApiFootballClient(api_key)
+        self._tsdb = TheSportsDBClient()
+        self._apf_available: bool | None = None  # None = pas encore testé
+
+    def _test_apf_key(self) -> bool:
+        """Vérifie que la clé API-Football est valide (résultat mis en cache)."""
+        if self._apf_available is not None:
+            return self._apf_available
+        try:
+            import httpx
+            resp = httpx.get(
+                "https://v3.football.api-sports.io/status",
+                headers={"x-apisports-key": self._client._headers["x-apisports-key"]},
+                timeout=10,
+            )
+            data = resp.json()
+            self._apf_available = "errors" not in data or not data["errors"]
+            if not self._apf_available:
+                log.warning(
+                    "france_nt.apf_key_invalid",
+                    reason="Clé API-Football invalide ou quota épuisé — fallback TheSportsDB activé",
+                )
+        except Exception as exc:
+            log.warning("france_nt.apf_check_failed", error=str(exc))
+            self._apf_available = False
+        return self._apf_available
 
     def fetch_upcoming_fixtures(self, from_date: date, to_date: date) -> list[FixtureDTO]:
-        current_year = date.today().year
-        # Couvre aussi l'année suivante pour les matchs programmés longtemps à l'avance
-        raw: list[dict] = []
-        for yr in {current_year, current_year + 1}:
-            raw.extend(self._client.get_france_fixtures(yr))
+        # ── Tentative API-Football ────────────────────────────────────────────
+        if self._test_apf_key():
+            current_year = date.today().year
+            raw: list[dict] = []
+            for yr in {current_year, current_year + 1}:
+                raw.extend(self._client.get_france_fixtures(yr))
 
-        out = []
-        for match in raw:
-            dto = _to_fixture_dto(match)
-            if dto is None or dto.status == "FINISHED":
-                continue
-            if from_date <= dto.match_date.date() <= to_date:
-                out.append(dto)
-        log.info("france_nt.upcoming_fetched", n=len(out))
+            out = []
+            for match in raw:
+                dto = _to_fixture_dto(match)
+                if dto is None or dto.status == "FINISHED":
+                    continue
+                if from_date <= dto.match_date.date() <= to_date:
+                    out.append(dto)
+            if out:
+                log.info("france_nt.upcoming_fetched", source="api_football", n=len(out))
+                return out
+
+        # ── Fallback TheSportsDB ──────────────────────────────────────────────
+        log.info("france_nt.upcoming_fallback", source="thesportsdb")
+        tsdb_fixtures = self._tsdb.get_next_fixtures()
+        out = [
+            fx for fx in tsdb_fixtures
+            if from_date <= fx.match_date.date() <= to_date
+        ]
+        log.info("france_nt.upcoming_fetched", source="thesportsdb", n=len(out))
         return out
 
     def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
