@@ -223,6 +223,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
     # Charge les cotes disponibles pour les fixtures à prédire (Pinnacle en priorité)
     unpredicted_ids = [f["id"] for f in unpredicted]
     odds_by_fixture: dict[int, tuple] = {}
+    context_by_fixture: dict[int, dict] = {}
     if unpredicted_ids:
         odds_rows = session.fetch_all(
             """
@@ -238,6 +239,28 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
         for r in odds_rows:
             odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
 
+        if sport in ("ligue1", "france_nt"):
+            ctx_rows = session.fetch_all(
+                """
+                SELECT fixture_id,
+                       home_injuries_count, away_injuries_count,
+                       home_rotation_signal, away_rotation_signal,
+                       weather_rain_mm, weather_wind_kmh
+                FROM match_context
+                WHERE fixture_id = ANY(%s)
+                """,
+                (unpredicted_ids,),
+            )
+            for r in ctx_rows:
+                context_by_fixture[r["fixture_id"]] = {
+                    "home_injuries_count":  r["home_injuries_count"],
+                    "away_injuries_count":  r["away_injuries_count"],
+                    "home_rotation_signal": r["home_rotation_signal"],
+                    "away_rotation_signal": r["away_rotation_signal"],
+                    "weather_rain_mm":      r["weather_rain_mm"] or 0.0,
+                    "weather_wind_kmh":     r["weather_wind_kmh"] or 0.0,
+                }
+
     n_predicted = 0
     # Utilise uniquement les matchs terminés comme historique pour les features
     finished_list = [m for m in all_matches if m.get("home_score") is not None]
@@ -252,6 +275,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             odds_home = fixture_odds[0] if fixture_odds else None
             odds_draw = fixture_odds[1] if fixture_odds else None
             odds_away = fixture_odds[2] if fixture_odds else None
+            ctx = context_by_fixture.get(fixture["id"])
 
             if sport == "france_nt":
                 n_absent, avail_ratio = _get_france_nt_availability(fixture["id"])
@@ -263,6 +287,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     n_starters_absent=n_absent,
                     starters_available_ratio=avail_ratio,
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                    context=ctx,
                 )
             elif sport == "ligue1":
                 vec, built_names = build_features_ligue1(
@@ -271,6 +296,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     elo_state, dc_model,
                     schedule=schedule,
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                    context=ctx,
                 )
             else:
                 vec, built_names = build_features_nba(

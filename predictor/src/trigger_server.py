@@ -35,7 +35,7 @@ log = structlog.get_logger()
 _ANTHROPIC_API_KEY: str = ""
 _INTERNAL_TOKEN:    str = ""
 
-_EXPLICIT_COMMANDS = {"/ingest", "/predict", "/evaluate", "/retrain", "/summary"}
+_EXPLICIT_COMMANDS = {"/ingest", "/predict", "/evaluate", "/retrain", "/summary", "/context"}
 
 _CHAT_MODEL      = "claude-haiku-4-5"
 _CHAT_MAX_TURNS  = 6
@@ -52,7 +52,7 @@ Utilise les outils quand la question porte sur des données concrètes.
 Pour les questions générales sur le fonctionnement du système, réponds directement.
 
 Si l'utilisateur demande à déclencher un job, indique-lui d'utiliser
-les commandes : /ingest · /predict · /evaluate · /retrain · /summary
+les commandes : /ingest · /predict · /evaluate · /retrain · /summary · /context
 """
 
 _CHAT_TOOLS: list[dict] = [

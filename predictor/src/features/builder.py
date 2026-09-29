@@ -1,6 +1,6 @@
 """Construit le vecteur de features pour un match donné.
 
-Ligue 1 features (27) :
+Ligue 1 features (33) :
   elo_home, elo_away, elo_diff,
   dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
@@ -10,6 +10,9 @@ Ligue 1 features (27) :
   days_since_home_game, days_since_away_game,
   home_xg_last5, home_xga_last5, away_xg_last5, away_xga_last5,  [Understat]
   implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
+  home_injuries_count, away_injuries_count,  [agent contexte]
+  home_rotation_signal, away_rotation_signal,
+  weather_rain_mm, weather_wind_kmh
 
 NBA features (21) :
   elo_home, elo_away, elo_diff,
@@ -19,7 +22,7 @@ NBA features (21) :
   days_since_home_game, days_since_away_game,
   implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
 
-France NT features (28) :
+France NT features (34) :
   elo_home, elo_away, elo_diff,
   dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
@@ -33,6 +36,9 @@ France NT features (28) :
   n_starters_absent,         [absents vs dernier XI type]
   starters_available_ratio,  [défaut 1.0 sans données de dispo]
   implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
+  home_injuries_count, away_injuries_count,  [agent contexte]
+  home_rotation_signal, away_rotation_signal,
+  weather_rain_mm, weather_wind_kmh
 """
 
 from __future__ import annotations
@@ -61,6 +67,9 @@ LIGUE1_FEATURES = [
     "days_since_home_game", "days_since_away_game",
     "home_xg_last5", "home_xga_last5", "away_xg_last5", "away_xga_last5",
     "implied_prob_home", "implied_prob_draw", "implied_prob_away", "market_efficiency",
+    "home_injuries_count", "away_injuries_count",
+    "home_rotation_signal", "away_rotation_signal",
+    "weather_rain_mm", "weather_wind_kmh",
 ]
 
 NBA_FEATURES = [
@@ -86,6 +95,9 @@ FRANCE_NT_FEATURES = [
     "n_starters_absent",
     "starters_available_ratio",
     "implied_prob_home", "implied_prob_draw", "implied_prob_away", "market_efficiency",
+    "home_injuries_count", "away_injuries_count",
+    "home_rotation_signal", "away_rotation_signal",
+    "weather_rain_mm", "weather_wind_kmh",
 ]
 
 # France NT team ID (API-Football)
@@ -232,11 +244,13 @@ def build_features_ligue1(
     odds_home: Optional[float] = None,
     odds_draw: Optional[float] = None,
     odds_away: Optional[float] = None,
+    context: Optional[dict] = None,
 ) -> tuple[list[float], list[str]]:
     """Retourne (feature_vector, feature_names).
 
     odds_* : cotes décimales du bookmaker le plus sharp disponible (Pinnacle > Bet365).
              None si pas de cotes en base → NaN dans le vecteur (XGBoost gère nativement).
+    context : dict issu de match_context (injuries, rotation, weather). None → valeurs neutres.
     """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
@@ -259,6 +273,14 @@ def build_features_ligue1(
 
     imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
 
+    ctx = context or {}
+    home_inj  = float(ctx.get("home_injuries_count", 0))
+    away_inj  = float(ctx.get("away_injuries_count", 0))
+    home_rot  = float(ctx.get("home_rotation_signal", False))
+    away_rot  = float(ctx.get("away_rotation_signal", False))
+    rain_mm   = float(ctx.get("weather_rain_mm", 0.0))
+    wind_kmh  = float(ctx.get("weather_wind_kmh", 0.0))
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         lam, mu,
@@ -269,6 +291,9 @@ def build_features_ligue1(
         days_h, days_a,
         h_xg, h_xga, a_xg, a_xga,
         imp_h, imp_d, imp_a, overround,
+        home_inj, away_inj,
+        home_rot, away_rot,
+        rain_mm, wind_kmh,
     ]
     return vec, LIGUE1_FEATURES
 
@@ -322,14 +347,16 @@ def build_features_france_nt(
     odds_home: Optional[float] = None,
     odds_draw: Optional[float] = None,
     odds_away: Optional[float] = None,
+    context: Optional[dict] = None,
 ) -> tuple[list[float], list[str]]:
-    """Features pour l'Équipe de France NT (28 features, 3 classes).
+    """Features pour l'Équipe de France NT (34 features, 3 classes).
 
     home_team_id / away_team_id : tels que stockés en DB (API-Football IDs).
     competition : code interne (FRIENDLY, UEFA_UNL, FIFA_WCQ, FIFA_WC, UEFA_EC, UEFA_ECQ).
     dc_model : modèle Dixon-Coles entraîné sur les matchs passés (None = valeurs par défaut).
     n_starters_absent : calculé depuis france_nt_lineups avant appel (défaut 0).
     starters_available_ratio : disponibles / 11 (défaut 1.0).
+    context : dict issu de match_context (injuries, rotation, weather). None → valeurs neutres.
     """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
@@ -353,6 +380,14 @@ def build_features_france_nt(
 
     imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
 
+    ctx = context or {}
+    home_inj  = float(ctx.get("home_injuries_count", 0))
+    away_inj  = float(ctx.get("away_injuries_count", 0))
+    home_rot  = float(ctx.get("home_rotation_signal", False))
+    away_rot  = float(ctx.get("away_rotation_signal", False))
+    rain_mm   = float(ctx.get("weather_rain_mm", 0.0))
+    wind_kmh  = float(ctx.get("weather_wind_kmh", 0.0))
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         lam, mu,
@@ -367,5 +402,8 @@ def build_features_france_nt(
         float(n_starters_absent),
         starters_available_ratio,
         imp_h, imp_d, imp_a, overround,
+        home_inj, away_inj,
+        home_rot, away_rot,
+        rain_mm, wind_kmh,
     ]
     return vec, FRANCE_NT_FEATURES

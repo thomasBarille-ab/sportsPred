@@ -154,6 +154,31 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
             ratio = n_total / 11.0 if n_total > 0 else 1.0
             availability_by_fixture[fid] = (0, ratio)
 
+    # Charge le contexte agent pour tous les sports supportés
+    context_by_fixture: dict[int, dict] = {}
+    if sport in ("ligue1", "france_nt") and fixture_ids:
+        ctx_rows = session.fetch_all(
+            """
+            SELECT fixture_id,
+                   home_injuries_count, away_injuries_count,
+                   home_rotation_signal, away_rotation_signal,
+                   weather_rain_mm, weather_wind_kmh
+            FROM match_context
+            WHERE fixture_id = ANY(%s)
+            """,
+            (fixture_ids,),
+        )
+        for r in ctx_rows:
+            context_by_fixture[r["fixture_id"]] = {
+                "home_injuries_count":  r["home_injuries_count"],
+                "away_injuries_count":  r["away_injuries_count"],
+                "home_rotation_signal": r["home_rotation_signal"],
+                "away_rotation_signal": r["away_rotation_signal"],
+                "weather_rain_mm":      r["weather_rain_mm"] or 0.0,
+                "weather_wind_kmh":     r["weather_wind_kmh"] or 0.0,
+            }
+        log.info("retrain.context_loaded", sport=sport, n_with_context=len(context_by_fixture))
+
     log.info("retrain.entraînement_en_cours", sport=sport,
              note="XGBoost — 400 estimateurs, profondeur max 4, lr 0.05")
 
@@ -164,6 +189,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
             model_storage_path=model_storage_path,
             odds_by_fixture=odds_by_fixture,
             availability_by_fixture=availability_by_fixture if sport == "france_nt" else None,
+            context_by_fixture=context_by_fixture if context_by_fixture else None,
         )
     except ValueError as exc:
         log.error("retrain.échec_entraînement", sport=sport, erreur=str(exc))

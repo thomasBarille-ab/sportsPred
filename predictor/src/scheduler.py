@@ -7,6 +7,7 @@ Planification UTC :
   08:00 — évaluation des prédictions (résultats connus)
   09:00 — analyse agent Claude (tool use, patterns d'échec)
   10:00 — résumé Ollama
+  18:00 — agent de contexte pré-match (météo + blessures, J-1)
   03:00 lundi — réentraînement Ligue 1 + NBA
   01/01 03:00 — backfill cotes historiques (idempotent, déclenchable manuellement)
 """
@@ -28,6 +29,7 @@ from .ingestion.football_data import FootballDataProvider
 from .ingestion.france_nt import FranceNTProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
+from .jobs.context_agent import run_context_agent
 from .jobs.odds_ingest import run_odds_ingest
 from .jobs.odds_backfill import run_odds_backfill
 from .jobs.bet_simulation import run_bet_simulation
@@ -110,6 +112,10 @@ def _build_metrics_snapshot() -> dict:
             k: float(v) for k, v in r.items() if k != "sport" and v is not None
         }
     return result
+
+
+def _job_context_agent(cfg: Settings) -> None:
+    _log_job("context_agent", None, run_context_agent, cfg.anthropic_api_key)
 
 
 def _job_bet_simulation(cfg: Settings) -> None:
@@ -262,6 +268,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_retrain(cfg),
         CronTrigger(day_of_week=cfg.retrain_weekday, hour=cfg.retrain_hour_utc, minute=0),
         id="retrain", name="Réentraînement modèles",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_context_agent(cfg),
+        CronTrigger(hour=18, minute=0),
+        id="context_agent", name="Agent contexte pré-match (météo + blessures J-1)",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(

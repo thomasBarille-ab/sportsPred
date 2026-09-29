@@ -65,7 +65,7 @@ HYPERPARAMS_FRANCE_NT: dict = {
     "reg_lambda": 2.0,
 }
 
-PIPELINE_VERSION = 4
+PIPELINE_VERSION = 5
 
 
 @dataclass
@@ -181,6 +181,7 @@ def _build_rows_walkforward(
     all_past_fn,  # callable(i) -> list[dict] des matchs passés
     odds_by_fixture: dict[int, tuple] | None = None,
     availability_by_fixture: dict[int, tuple[int, float]] | None = None,
+    context_by_fixture: dict[int, dict] | None = None,
 ) -> tuple[list[list[float]], list[int], list[datetime]]:
     """Construit les features en walk-forward (Elo et DC mis à jour après chaque match)."""
     X, y, dates = [], [], []
@@ -211,6 +212,8 @@ def _build_rows_walkforward(
             odds_draw = odds[1] if odds else None
             odds_away = odds[2] if odds else None
 
+            ctx = (context_by_fixture or {}).get(fixture_id)
+
             if sport == "france_nt":
                 avail = (availability_by_fixture or {}).get(fixture_id, (0, 1.0))
                 dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
@@ -222,6 +225,7 @@ def _build_rows_walkforward(
                     n_starters_absent=avail[0],
                     starters_available_ratio=avail[1],
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                    context=ctx,
                 )
             elif sport == "ligue1":
                 dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
@@ -230,6 +234,7 @@ def _build_rows_walkforward(
                     m["match_date"], past,
                     elo_state, dc,
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                    context=ctx,
                 )
             else:
                 vec, _ = build_features_nba(
@@ -264,6 +269,7 @@ def train_model(
     holdout_fraction: float = 0.15,
     odds_by_fixture: dict[int, tuple] | None = None,
     availability_by_fixture: dict[int, tuple[int, float]] | None = None,
+    context_by_fixture: dict[int, dict] | None = None,
 ) -> TrainResult:
     """Entraîne un nouveau modèle et retourne les métriques sur le holdout.
 
@@ -295,6 +301,7 @@ def train_model(
         all_past_fn=lambda i: train_matches[:i],
         odds_by_fixture=odds_by_fixture,
         availability_by_fixture=availability_by_fixture,
+        context_by_fixture=context_by_fixture,
     )
 
     # ── Walk-forward Elo + DC sur le holdout (continuation) ──────────────────
@@ -304,6 +311,7 @@ def train_model(
         all_past_fn=lambda i: train_matches + test_matches[:i],
         odds_by_fixture=odds_by_fixture,
         availability_by_fixture=availability_by_fixture,
+        context_by_fixture=context_by_fixture,
     )
 
     min_train = 20 if sport == "france_nt" else 40
@@ -345,6 +353,7 @@ def train_model(
         all_past_fn=lambda i: finished[:i],
         odds_by_fixture=odds_by_fixture,
         availability_by_fixture=availability_by_fixture,
+        context_by_fixture=context_by_fixture,
     )
 
     X_full_np = np.array(X_full)
