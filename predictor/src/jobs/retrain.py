@@ -16,6 +16,7 @@ from ..training.champion_challenger import (
     register_model_version,
 )
 from ..training.trainer import (
+    HYPERPARAMS_FRANCE_NT,
     HYPERPARAMS_LIGUE1,
     HYPERPARAMS_NBA,
     PIPELINE_VERSION,
@@ -58,10 +59,14 @@ def _score_champion_on_holdout(
 
     # Vérifie que les feature sets sont identiques
     champ_features = artifact.get("feature_names", [])
-    challenger_features = HYPERPARAMS_LIGUE1 if sport == "ligue1" else HYPERPARAMS_NBA
     champ_fn_set = set(champ_features)
-    from ..features.builder import LIGUE1_FEATURES, NBA_FEATURES
-    exp_features = LIGUE1_FEATURES if sport == "ligue1" else NBA_FEATURES
+    from ..features.builder import FRANCE_NT_FEATURES, LIGUE1_FEATURES, NBA_FEATURES
+    if sport == "france_nt":
+        exp_features = FRANCE_NT_FEATURES
+    elif sport == "ligue1":
+        exp_features = LIGUE1_FEATURES
+    else:
+        exp_features = NBA_FEATURES
     if champ_fn_set != set(exp_features):
         log.info(
             "retrain.feature_mismatch",
@@ -88,7 +93,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         """
         SELECT f.id, f.home_team_id, f.away_team_id, f.match_date,
                f.home_score, f.away_score, f.season,
-               f.home_xg, f.away_xg
+               f.competition, f.home_xg, f.away_xg
         FROM fixtures f
         WHERE f.sport = %s AND f.home_score IS NOT NULL
         ORDER BY f.match_date
@@ -113,22 +118,41 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         for r in odds_rows:
             odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
 
+    min_required = 30 if sport == "france_nt" else 60
     log.info(
         "retrain.données",
         sport=sport,
         matchs_historiques=len(all_matches),
-        seuil_minimum=60,
+        seuil_minimum=min_required,
     )
 
-    if len(all_matches) < 60:
+    if len(all_matches) < min_required:
         log.warning(
             "retrain.données_insuffisantes",
             sport=sport,
             n=len(all_matches),
-            manquants=60 - len(all_matches),
+            manquants=min_required - len(all_matches),
             action="skip — entraînement annulé",
         )
         return {"status": "skipped", "reason": "insufficient_data", "n_matches": len(all_matches)}
+
+    # Pour France NT : charge les données de disponibilité depuis les lineups
+    availability_by_fixture: dict[int, tuple[int, float]] = {}
+    if sport == "france_nt":
+        lineup_rows = session.fetch_all(
+            """
+            SELECT fixture_id,
+                   COUNT(*) FILTER (WHERE is_starter)               AS n_starters_total,
+                   11                                                AS xi_size
+            FROM france_nt_lineups
+            GROUP BY fixture_id
+            """,
+        )
+        for row in lineup_rows:
+            fid = row["fixture_id"]
+            n_total = int(row["n_starters_total"] or 0)
+            ratio = n_total / 11.0 if n_total > 0 else 1.0
+            availability_by_fixture[fid] = (0, ratio)
 
     log.info("retrain.entraînement_en_cours", sport=sport,
              note="XGBoost — 400 estimateurs, profondeur max 4, lr 0.05")
@@ -139,6 +163,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
             all_matches=all_matches,
             model_storage_path=model_storage_path,
             odds_by_fixture=odds_by_fixture,
+            availability_by_fixture=availability_by_fixture if sport == "france_nt" else None,
         )
     except ValueError as exc:
         log.error("retrain.échec_entraînement", sport=sport, erreur=str(exc))
@@ -184,7 +209,13 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
     version = datetime.now(timezone.utc).strftime("v%Y%m%d_%H%M%S")
     model_path = result.model_path
 
-    hyperparams = (HYPERPARAMS_LIGUE1 if sport == "ligue1" else HYPERPARAMS_NBA).copy()
+    if sport == "france_nt":
+        _hp = HYPERPARAMS_FRANCE_NT
+    elif sport == "ligue1":
+        _hp = HYPERPARAMS_LIGUE1
+    else:
+        _hp = HYPERPARAMS_NBA
+    hyperparams = _hp.copy()
     hyperparams["pipeline_version"] = PIPELINE_VERSION
 
     version_id = register_model_version(

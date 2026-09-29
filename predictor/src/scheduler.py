@@ -25,6 +25,7 @@ from .config import Settings
 from .db import session
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
+from .ingestion.france_nt import FranceNTProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
 from .jobs.odds_ingest import run_odds_ingest
@@ -129,15 +130,21 @@ def _job_ingest(cfg: Settings) -> None:
     bdl = BallDontLieProvider(cfg.balldontlie_api_key)
     _log_job("ingest", "ligue1", ingest.run_ingest, fd, "ligue1")
     _log_job("ingest", "nba",    ingest.run_ingest, bdl, "nba")
+    if cfg.apifootball_api_key:
+        fnt = FranceNTProvider(cfg.apifootball_api_key)
+        _log_job("ingest", "france_nt", ingest.run_france_nt_ingest_and_lineups, fnt, "france_nt")
 
 
 def _job_predict(cfg: Settings) -> None:
-    for sport in ("ligue1", "nba"):
+    sports = ["ligue1", "nba"]
+    if cfg.apifootball_api_key:
+        sports.append("france_nt")
+    for sport in sports:
         _log_job("predict", sport, predict.run_predict, sport, cfg.predict_horizon_hours, cfg.anthropic_api_key)
 
 
 def _job_evaluate() -> None:
-    for sport in ("ligue1", "nba"):
+    for sport in ("ligue1", "nba", "france_nt"):
         _log_job("evaluate", sport, evaluate.run_evaluate, sport)
 
 
@@ -172,7 +179,10 @@ def _job_summary(cfg: Settings) -> None:
 
 
 def _job_retrain(cfg: Settings) -> None:
-    for sport in ("ligue1", "nba"):
+    sports = ["ligue1", "nba"]
+    if cfg.apifootball_api_key:
+        sports.append("france_nt")
+    for sport in sports:
         _log_job("retrain", sport, retrain.run_retrain, sport, cfg.model_storage_path)
 
 

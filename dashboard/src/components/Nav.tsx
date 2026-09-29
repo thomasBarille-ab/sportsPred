@@ -4,6 +4,7 @@ const links = [
   { href: "/",        label: "Vue d'ensemble" },
   { href: "/ligue1",  label: "Ligue 1" },
   { href: "/nba",     label: "NBA" },
+  { href: "/france",  label: "France NT" },
   { href: "/models",  label: "Modèles" },
   { href: "/logs",    label: "Logs" },
   { href: "/betting", label: "Paris" },

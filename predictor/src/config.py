@@ -7,6 +7,7 @@ class Settings:
     postgres_url: str
     football_data_api_key: str
     balldontlie_api_key: str
+    apifootball_api_key: str
     ollama_url: str
     ollama_model: str
     model_storage_path: str
@@ -37,6 +38,7 @@ def load_settings() -> Settings:
         postgres_url=_require("POSTGRES_URL"),
         football_data_api_key=_require("FOOTBALL_DATA_API_KEY"),
         balldontlie_api_key=os.environ.get("BALLDONTLIE_API_KEY", ""),
+        apifootball_api_key=os.environ.get("APIFOOTBALL_API_KEY", ""),
         ollama_url=os.environ.get("OLLAMA_URL", "http://ollama:11434"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
         model_storage_path=os.environ.get("MODEL_STORAGE_PATH", "/models"),

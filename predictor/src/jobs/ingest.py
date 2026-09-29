@@ -172,6 +172,48 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
     return {"upcoming": n_upcoming, "results": n_results, "xg_updated": n_xg}
 
 
+def run_france_nt_ingest_and_lineups(provider, sport: str = "france_nt") -> dict:
+    """Ingestion France NT + mise à jour des compositions des matchs récents terminés."""
+    from .france_nt_backfill import _upsert_lineup
+    from ..ingestion.france_nt import FranceNTProvider
+
+    result = run_ingest(provider, sport)
+
+    # Complète les lineups pour les matchs terminés récents sans composition
+    if not isinstance(provider, FranceNTProvider):
+        return result
+
+    missing = session.fetch_all(
+        """
+        SELECT f.id, f.external_id
+        FROM fixtures f
+        WHERE f.sport = 'france_nt'
+          AND f.home_score IS NOT NULL
+          AND f.updated_at >= NOW() - INTERVAL '8 days'
+          AND NOT EXISTS (
+            SELECT 1 FROM france_nt_lineups l WHERE l.fixture_id = f.id
+          )
+        ORDER BY f.match_date DESC
+        LIMIT 5
+        """,
+    )
+
+    n_lineups = 0
+    for row in missing:
+        try:
+            raw = provider.fetch_lineups(row["external_id"])
+            if raw:
+                _upsert_lineup(row["id"], raw)
+                n_lineups += 1
+        except Exception as exc:
+            log.warning("ingest.france_nt_lineup_error", external_id=row["external_id"], error=str(exc))
+
+    if n_lineups:
+        log.info("ingest.france_nt_lineups_updated", n=n_lineups)
+    result["lineups_updated"] = n_lineups
+    return result
+
+
 def run_historical_ingest(provider: DataProvider, sport: str, seasons: list[str]) -> int:
     """Chargement initial de l'historique pour une liste de saisons."""
     total = 0

@@ -34,6 +34,35 @@ def _configure_logging(level: str) -> None:
     logging.basicConfig(stream=sys.stdout, level=getattr(logging, level.upper(), logging.INFO))
 
 
+def _bootstrap_france_nt(cfg: Settings) -> None:
+    """Bootstrap France NT : charge l'historique depuis 2018 si la table est vide."""
+    import datetime
+    from .ingestion.france_nt import FranceNTProvider
+    from .jobs.france_nt_backfill import run_france_nt_backfill
+
+    log = structlog.get_logger()
+
+    if not cfg.apifootball_api_key:
+        log.warning("bootstrap.france_nt.skip", reason="APIFOOTBALL_API_KEY non configuré")
+        return
+
+    count = session.fetch_one(
+        "SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'france_nt'"
+    )
+    if count and count["n"] > 0:
+        return
+
+    log.info("bootstrap.france_nt.start")
+    provider = FranceNTProvider(cfg.apifootball_api_key)
+    current_year = datetime.date.today().year
+    seasons = [str(y) for y in range(2018, current_year + 1)]
+    try:
+        run_france_nt_backfill(provider, seasons, max_lineup_fetches=80)
+        log.info("bootstrap.france_nt.done")
+    except Exception as exc:
+        log.error("bootstrap.france_nt.error", error=str(exc))
+
+
 def _bootstrap_if_empty(cfg: Settings) -> None:
     """Si aucune fixture n'existe en DB, charge 2 saisons d'historique."""
     import httpx
@@ -118,18 +147,19 @@ def _maybe_retrain_if_no_model(cfg: Settings) -> None:
 
     log = structlog.get_logger()
 
-    for sport in ("ligue1", "nba"):
+    for sport in ("ligue1", "nba", "france_nt"):
         prod_model = session.fetch_one(
             "SELECT id FROM model_versions WHERE sport = %s AND is_production = TRUE LIMIT 1",
             (sport,),
         )
         if prod_model:
             continue
+        min_samples = 30 if sport == "france_nt" else 60
         count = session.fetch_one(
             "SELECT COUNT(*) AS n FROM fixtures WHERE sport = %s AND home_score IS NOT NULL",
             (sport,),
         )
-        if count and count["n"] >= 60:
+        if count and count["n"] >= min_samples:
             log.info(
                 "bootstrap.auto_retrain",
                 sport=sport,
@@ -155,6 +185,7 @@ def main() -> None:
 
     _bootstrap_if_empty(cfg)
     _backfill_rounds_if_needed(cfg)
+    _bootstrap_france_nt(cfg)
     _maybe_retrain_if_no_model(cfg)
 
     # Démarre le scheduler (bloquant — ne retourne jamais)

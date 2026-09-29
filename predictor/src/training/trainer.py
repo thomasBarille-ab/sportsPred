@@ -24,8 +24,10 @@ import numpy as np
 import xgboost as xgb
 
 from ..features.builder import (
+    FRANCE_NT_FEATURES,
     LIGUE1_FEATURES,
     NBA_FEATURES,
+    build_features_france_nt,
     build_features_ligue1,
     build_features_nba,
 )
@@ -50,6 +52,19 @@ HYPERPARAMS_NBA: dict = {
     "colsample_bytree": 0.8,
 }
 
+# Hyperparamètres renforcés pour France NT (~100 matchs) — régularisation forte
+HYPERPARAMS_FRANCE_NT: dict = {
+    "n_estimators": 200,
+    "max_depth": 3,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.7,
+    "min_child_weight": 5,
+    "gamma": 0.1,
+    "reg_alpha": 0.1,
+    "reg_lambda": 2.0,
+}
+
 PIPELINE_VERSION = 4
 
 
@@ -68,8 +83,11 @@ class TrainResult:
     y_test: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
+_THREE_CLASS_SPORTS = {"ligue1", "france_nt"}
+
+
 def _outcome_label(home_score: int, away_score: int, sport: str) -> int:
-    if sport == "ligue1":
+    if sport in _THREE_CLASS_SPORTS:
         if home_score > away_score: return 0
         if home_score == away_score: return 1
         return 2
@@ -85,6 +103,15 @@ def _sample_weights(dates: list[datetime], half_life: float = 365.0) -> np.ndarr
 
 
 def _build_model(sport: str) -> xgb.XGBClassifier:
+    if sport == "france_nt":
+        return xgb.XGBClassifier(
+            objective="multi:softprob",
+            num_class=3,
+            eval_metric="mlogloss",
+            random_state=42,
+            n_jobs=-1,
+            **HYPERPARAMS_FRANCE_NT,
+        )
     if sport == "ligue1":
         return xgb.XGBClassifier(
             objective="multi:softprob",
@@ -126,7 +153,7 @@ def _compute_metrics(
     """Retourne (brier, logloss, accuracy)."""
     from sklearn.metrics import log_loss
 
-    if sport == "ligue1":
+    if sport in _THREE_CLASS_SPORTS:
         brier = _brier_multiclass(proba, y, n_classes=3)
         ll    = float(log_loss(y, proba, labels=[0, 1, 2]))
         acc   = float(np.mean(np.argmax(proba, axis=1) == y))
@@ -153,6 +180,7 @@ def _build_rows_walkforward(
     dc_x0: list,  # [np.ndarray | None]
     all_past_fn,  # callable(i) -> list[dict] des matchs passés
     odds_by_fixture: dict[int, tuple] | None = None,
+    availability_by_fixture: dict[int, tuple[int, float]] | None = None,
 ) -> tuple[list[list[float]], list[int], list[datetime]]:
     """Construit les features en walk-forward (Elo et DC mis à jour après chaque match)."""
     X, y, dates = [], [], []
@@ -183,7 +211,16 @@ def _build_rows_walkforward(
             odds_draw = odds[1] if odds else None
             odds_away = odds[2] if odds else None
 
-            if sport == "ligue1":
+            if sport == "france_nt":
+                avail = (availability_by_fixture or {}).get(fixture_id, (0, 1.0))
+                vec, _ = build_features_france_nt(
+                    m["home_team_id"], m["away_team_id"],
+                    m["match_date"], m.get("competition", "FRIENDLY"),
+                    past, elo_state,
+                    n_starters_absent=avail[0],
+                    starters_available_ratio=avail[1],
+                )
+            elif sport == "ligue1":
                 dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
                 vec, _ = build_features_ligue1(
                     m["home_team_id"], m["away_team_id"],
@@ -218,11 +255,12 @@ def _build_rows_walkforward(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def train_model(
-    sport: Literal["ligue1", "nba"],
+    sport: str,
     all_matches: list[dict],
     model_storage_path: str,
     holdout_fraction: float = 0.15,
     odds_by_fixture: dict[int, tuple] | None = None,
+    availability_by_fixture: dict[int, tuple[int, float]] | None = None,
 ) -> TrainResult:
     """Entraîne un nouveau modèle et retourne les métriques sur le holdout.
 
@@ -230,12 +268,13 @@ def train_model(
     Les métriques holdout sont calculées sur le modèle de validation (85 % des données),
     puis un modèle final est entraîné sur 100 % des données et sauvegardé.
     """
+    min_samples = 30 if sport == "france_nt" else 60
     finished = sorted(
         [m for m in all_matches if m.get("home_score") is not None],
         key=lambda x: x["match_date"],
     )
-    if len(finished) < 60:
-        raise ValueError(f"Not enough finished matches for {sport}: {len(finished)} < 60")
+    if len(finished) < min_samples:
+        raise ValueError(f"Not enough finished matches for {sport}: {len(finished)} < {min_samples}")
 
     split = max(1, int(len(finished) * (1 - holdout_fraction)))
     train_matches = finished[:split]
@@ -252,6 +291,7 @@ def train_model(
         elo_state, dc_state, dc_last_refit, dc_x0,
         all_past_fn=lambda i: train_matches[:i],
         odds_by_fixture=odds_by_fixture,
+        availability_by_fixture=availability_by_fixture,
     )
 
     # ── Walk-forward Elo + DC sur le holdout (continuation) ──────────────────
@@ -260,10 +300,14 @@ def train_model(
         elo_state, dc_state, dc_last_refit, dc_x0,
         all_past_fn=lambda i: train_matches + test_matches[:i],
         odds_by_fixture=odds_by_fixture,
+        availability_by_fixture=availability_by_fixture,
     )
 
-    if len(X_train) < 40 or len(X_test) < 5:
-        raise ValueError(f"Insufficient samples after feature build: train={len(X_train)}, test={len(X_test)}")
+    min_train = 20 if sport == "france_nt" else 40
+    if len(X_train) < min_train or len(X_test) < 5:
+        raise ValueError(
+            f"Insufficient samples after feature build: train={len(X_train)}, test={len(X_test)}"
+        )
 
     X_train_np = np.array(X_train)
     y_train_np = np.array(y_train)
@@ -271,7 +315,12 @@ def train_model(
     y_test_np  = np.array(y_test)
     weights    = _sample_weights(dates_train)
 
-    feature_names = LIGUE1_FEATURES if sport == "ligue1" else NBA_FEATURES
+    if sport == "france_nt":
+        feature_names = FRANCE_NT_FEATURES
+    elif sport == "ligue1":
+        feature_names = LIGUE1_FEATURES
+    else:
+        feature_names = NBA_FEATURES
 
     # ── Modèle de validation (métriques holdout) ──────────────────────────────
     val_model = _build_model(sport)
@@ -292,6 +341,7 @@ def train_model(
         elo_final, dc_final, dc_lrf, dc_x0f,
         all_past_fn=lambda i: finished[:i],
         odds_by_fixture=odds_by_fixture,
+        availability_by_fixture=availability_by_fixture,
     )
 
     X_full_np = np.array(X_full)

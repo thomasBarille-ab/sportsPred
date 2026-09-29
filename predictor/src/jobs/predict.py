@@ -13,7 +13,7 @@ import numpy as np
 import structlog
 
 from ..db import session
-from ..features.builder import build_features_ligue1, build_features_nba
+from ..features.builder import build_features_france_nt, build_features_ligue1, build_features_nba
 from ..features.elo import build_elo_state, compute_elo_ratings
 
 log = structlog.get_logger()
@@ -116,13 +116,39 @@ def _get_all_matches_for_sport(sport: str) -> list[dict]:
         """
         SELECT f.id, f.home_team_id, f.away_team_id, f.match_date,
                f.home_score, f.away_score, f.status,
-               f.home_xg, f.away_xg
+               f.competition, f.home_xg, f.away_xg
         FROM fixtures f
         WHERE f.sport = %s
         ORDER BY f.match_date
         """,
         (sport,),
     )
+
+
+def _get_france_nt_availability(fixture_id: int) -> tuple[int, float]:
+    """Retourne (n_starters_absent, available_ratio) pour un match France NT à venir.
+
+    Compare le dernier XI connu avec les titulaires disponibles.
+    Retourne (0, 1.0) si aucune donnée de lineup n'est disponible.
+    """
+    last_xi = session.fetch_all(
+        """
+        SELECT l.player_id
+        FROM france_nt_lineups l
+        JOIN fixtures f ON f.id = l.fixture_id
+        WHERE l.is_starter = TRUE
+          AND f.sport = 'france_nt'
+          AND f.home_score IS NOT NULL
+          AND f.id != %s
+        ORDER BY f.match_date DESC
+        LIMIT 11
+        """,
+        (fixture_id,),
+    )
+    if not last_xi:
+        return 0, 1.0
+    # Sans données de blessures pre-match, on suppose tous disponibles
+    return 0, 1.0
 
 
 def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthropic_api_key: str = "") -> int:
@@ -170,7 +196,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
     unpredicted = session.fetch_all(
         """
         SELECT f.id, f.home_team_id, f.home_team_name,
-               f.away_team_id, f.away_team_name, f.match_date
+               f.away_team_id, f.away_team_name, f.match_date, f.competition
         FROM fixtures f
         LEFT JOIN predictions p ON p.fixture_id = f.id
         WHERE f.sport = %s
@@ -227,7 +253,17 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             odds_draw = fixture_odds[1] if fixture_odds else None
             odds_away = fixture_odds[2] if fixture_odds else None
 
-            if sport == "ligue1":
+            if sport == "france_nt":
+                n_absent, avail_ratio = _get_france_nt_availability(fixture["id"])
+                vec, built_names = build_features_france_nt(
+                    fixture["home_team_id"], fixture["away_team_id"],
+                    match_date, fixture.get("competition", "FRIENDLY"),
+                    finished_list, elo_state,
+                    n_starters_absent=n_absent,
+                    starters_available_ratio=avail_ratio,
+                    odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
+                )
+            elif sport == "ligue1":
                 vec, built_names = build_features_ligue1(
                     fixture["home_team_id"], fixture["away_team_id"],
                     match_date, finished_list,
@@ -248,16 +284,13 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             X     = np.array([aligned])
             proba = model.predict_proba(X)[0]
 
-            if sport == "ligue1":
+            if sport in ("ligue1", "france_nt"):
                 p_home, p_draw, p_away = float(proba[0]), float(proba[1]), float(proba[2])
-            else:
-                p_home, p_draw, p_away = float(proba[1]), None, float(proba[0])
-
-            if sport == "ligue1":
                 max_idx = int(np.argmax(proba))
                 outcome_map = {0: "home", 1: "draw", 2: "away"}
                 predicted_outcome = outcome_map[max_idx]
             else:
+                p_home, p_draw, p_away = float(proba[1]), None, float(proba[0])
                 predicted_outcome = "home" if p_home >= 0.5 else "away"
 
             snapshot = dict(zip(built_names, [round(v, 4) for v in vec]))
@@ -270,7 +303,26 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
             )
 
             # ── Log de raisonnement ────────────────────────────────────────────
-            if sport == "ligue1":
+            if sport == "france_nt":
+                elo_diff = int(round(snapshot.get("elo_diff", 0)))
+                elo_sign = f"+{elo_diff}" if elo_diff >= 0 else str(elo_diff)
+                comp_type_map = {0.0: "amical", 1.0: "Nations League", 2.0: "qualif", 3.0: "tournoi"}
+                comp_label = comp_type_map.get(snapshot.get("competition_type", 0.0), "?")
+                france_side = "domicile" if snapshot.get("france_is_home", 1.0) == 1.0 else "extérieur"
+                log.info(
+                    "predict.raisonnement",
+                    match=f"{fixture['home_team_name']} vs {fixture['away_team_name']}",
+                    elo_diff=elo_sign,
+                    france_side=france_side,
+                    competition=comp_label,
+                    absents=int(snapshot.get("n_starters_absent", 0)),
+                    decision=predicted_outcome,
+                    confiance=f"{confidence:.0%}",
+                    p_home=f"{p_home:.1%}",
+                    p_draw=f"{p_draw:.1%}" if p_draw is not None else None,
+                    p_away=f"{p_away:.1%}",
+                )
+            elif sport == "ligue1":
                 elo_diff = int(round(snapshot.get("elo_diff", 0)))
                 elo_sign = f"+{elo_diff}" if elo_diff >= 0 else str(elo_diff)
                 dc_str = (

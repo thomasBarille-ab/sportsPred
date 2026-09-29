@@ -14,7 +14,11 @@ Outcome = Literal["home", "draw", "away"]
 BRIER_BASELINE: dict[str, float] = {
     "ligue1": 2 / 3,
     "nba": 0.25,
+    "france_nt": 2 / 3,
 }
+
+# Sports avec 3 classes (home / draw / away)
+_THREE_CLASS_SPORTS = {"ligue1", "france_nt"}
 
 
 def outcome_from_scores(home_score: int, away_score: int, sport: str) -> Outcome:
@@ -22,7 +26,7 @@ def outcome_from_scores(home_score: int, away_score: int, sport: str) -> Outcome
         return "home"
     if away_score > home_score:
         return "away"
-    if sport == "ligue1":
+    if sport in _THREE_CLASS_SPORTS:
         return "draw"
     # NBA ne devrait pas avoir de match nul — on force "home" par convention
     return "home"
@@ -40,7 +44,7 @@ def brier_score(
     Plus bas = meilleur. Parfait = 0.
     Ligue 1 uniforme = 2/3 ≈ 0.6667, NBA uniforme = 0.25.
     """
-    if sport == "ligue1":
+    if sport in _THREE_CLASS_SPORTS:
         o_home = 1.0 if actual == "home" else 0.0
         o_draw = 1.0 if actual == "draw" else 0.0
         o_away = 1.0 if actual == "away" else 0.0
@@ -63,7 +67,7 @@ def log_loss_single(
     prob_home = max(eps, min(1 - eps, prob_home))
     prob_away = max(eps, min(1 - eps, prob_away))
 
-    if sport == "ligue1":
+    if sport in _THREE_CLASS_SPORTS:
         pd = max(eps, min(1 - eps, prob_draw or 0.0))
         if actual == "home": return -math.log(prob_home)
         if actual == "draw": return -math.log(pd)

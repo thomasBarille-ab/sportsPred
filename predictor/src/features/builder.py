@@ -18,6 +18,18 @@ NBA features (21) :
   h2h_home_wins, h2h_away_wins,
   days_since_home_game, days_since_away_game,
   implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
+
+France NT features (19) :
+  elo_home, elo_away, elo_diff,
+  home_ppg_last5, home_conceded_last5, home_form_pts_last5,
+  away_ppg_last5, away_conceded_last5, away_form_pts_last5,
+  h2h_home_wins, h2h_draws, h2h_away_wins,
+  days_since_home_match, days_since_away_match,
+  competition_type,          [0=friendly 1=nations_league 2=qualifier 3=tournament]
+  france_is_home,            [1 si France = équipe domicile]
+  manager_id,                [0=Deschamps, à incrémenter lors d'un changement]
+  n_starters_absent,         [absents vs dernier XI type]
+  starters_available_ratio   [défaut 1.0 sans données de dispo]
 """
 
 from __future__ import annotations
@@ -56,6 +68,42 @@ NBA_FEATURES = [
     "days_since_home_game", "days_since_away_game",
     "implied_prob_home", "implied_prob_away", "market_efficiency",
 ]
+
+FRANCE_NT_FEATURES = [
+    "elo_home", "elo_away", "elo_diff",
+    "home_ppg_last5", "home_conceded_last5", "home_form_pts_last5",
+    "away_ppg_last5", "away_conceded_last5", "away_form_pts_last5",
+    "h2h_home_wins", "h2h_draws", "h2h_away_wins",
+    "days_since_home_match", "days_since_away_match",
+    "competition_type",
+    "france_is_home",
+    "manager_id",
+    "n_starters_absent",
+    "starters_available_ratio",
+]
+
+# France NT team ID (API-Football)
+FRANCE_TEAM_ID = "2"
+
+# Codes de compétition → entier pour le feature competition_type
+_COMPETITION_TYPE: dict[str, float] = {
+    "FRIENDLY":  0.0,
+    "UEFA_UNL":  1.0,
+    "FIFA_WCQ":  2.0,
+    "UEFA_ECQ":  2.0,
+    "FIFA_WC":   3.0,
+    "UEFA_EC":   3.0,
+}
+
+
+def _competition_type_value(competition: str) -> float:
+    return _COMPETITION_TYPE.get(competition, 0.0)
+
+
+def _manager_id_france(match_date: datetime) -> float:
+    # Deschamps en poste depuis juillet 2012 — couvre toute la période 2018+.
+    # Incrémenter manuellement lors d'un changement de sélectionneur.
+    return 0.0
 
 
 def _days_since_last_game(
@@ -253,3 +301,52 @@ def build_features_nba(
         imp_h, imp_a, overround,
     ]
     return vec, NBA_FEATURES
+
+
+def build_features_france_nt(
+    home_team_id: str,
+    away_team_id: str,
+    match_date: datetime,
+    competition: str,
+    all_matches: list[dict],
+    elo_state: EloState,
+    n_starters_absent: int = 0,
+    starters_available_ratio: float = 1.0,
+    odds_home: Optional[float] = None,
+    odds_draw: Optional[float] = None,
+    odds_away: Optional[float] = None,
+) -> tuple[list[float], list[str]]:
+    """Features pour l'Équipe de France NT (19 features, 3 classes).
+
+    home_team_id / away_team_id : tels que stockés en DB (API-Football IDs).
+    competition : code interne (FRIENDLY, UEFA_UNL, FIFA_WCQ, FIFA_WC, UEFA_EC, UEFA_ECQ).
+    n_starters_absent : calculé depuis france_nt_lineups avant appel (défaut 0).
+    starters_available_ratio : disponibles / 11 (défaut 1.0).
+    """
+    elo_h = elo_state.get(home_team_id)
+    elo_a = elo_state.get(away_team_id)
+
+    h_ppg, h_con, h_pts = _rolling_pts_last5(home_team_id, match_date, all_matches)
+    a_ppg, a_con, a_pts = _rolling_pts_last5(away_team_id, match_date, all_matches)
+    h2h = compute_h2h_stats(home_team_id, away_team_id, match_date, all_matches, window=5)
+
+    days_h = _days_since_last_game(home_team_id, match_date, all_matches)
+    days_a = _days_since_last_game(away_team_id, match_date, all_matches)
+
+    comp_type = _competition_type_value(competition)
+    france_is_home = 1.0 if home_team_id == FRANCE_TEAM_ID else 0.0
+    manager_id = _manager_id_france(match_date)
+
+    vec = [
+        elo_h, elo_a, elo_h - elo_a,
+        h_ppg, h_con, h_pts,
+        a_ppg, a_con, a_pts,
+        h2h["h2h_home_wins"], h2h["h2h_draws"], h2h["h2h_away_wins"],
+        days_h, days_a,
+        comp_type,
+        france_is_home,
+        manager_id,
+        float(n_starters_absent),
+        starters_available_ratio,
+    ]
+    return vec, FRANCE_NT_FEATURES

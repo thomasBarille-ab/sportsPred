@@ -238,3 +238,47 @@ export async function getFeatureImportances(sport: string) {
     LIMIT 30
   `.catch(() => [] as { feature_name: string; importance: number }[]);
 }
+
+// ── France NT ──────────────────────────────────────────────────────────────
+
+export async function getFranceNTUpcoming(limit = 10) {
+  return sql`
+    SELECT
+      f.id,
+      f.home_team_name,
+      f.away_team_name,
+      f.match_date,
+      f.competition,
+      p.predicted_outcome,
+      ROUND(p.prob_home_win::numeric, 2)  AS prob_home,
+      ROUND(p.prob_draw::numeric, 2)      AS prob_draw,
+      ROUND(p.prob_away_win::numeric, 2)  AS prob_away,
+      p.explanation,
+      (p.features_snapshot->>'france_is_home')::float  AS france_is_home,
+      (p.features_snapshot->>'competition_type')::float AS competition_type
+    FROM fixtures f
+    LEFT JOIN predictions p ON p.fixture_id = f.id
+    WHERE f.sport = 'france_nt'
+      AND f.match_date >= NOW()
+      AND f.status IN ('SCHEDULED', 'TIMED')
+    ORDER BY f.match_date ASC
+    LIMIT ${limit}
+  `.catch(() => []);
+}
+
+export async function getFranceNTCompetitionStats() {
+  return sql`
+    SELECT
+      f.competition,
+      COUNT(ps.id)                                           AS n_scored,
+      ROUND(AVG(ps.is_correct::int::float)::numeric, 3)     AS accuracy,
+      ROUND(AVG(ps.brier_score)::numeric, 4)                 AS avg_brier
+    FROM fixtures f
+    JOIN predictions p  ON p.fixture_id = f.id
+    JOIN prediction_scores ps ON ps.prediction_id = p.id
+    WHERE f.sport = 'france_nt'
+    GROUP BY f.competition
+    HAVING COUNT(ps.id) >= 2
+    ORDER BY COUNT(ps.id) DESC
+  `.catch(() => []);
+}

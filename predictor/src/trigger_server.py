@@ -42,7 +42,7 @@ _CHAT_MAX_TURNS  = 6
 _CHAT_MAX_TOKENS = 1024
 
 _CHAT_SYSTEM = """\
-Tu es l'assistant du système de prédiction sportive (Ligue 1 + NBA).
+Tu es l'assistant du système de prédiction sportive (Ligue 1, NBA, Équipe de France NT).
 Tu réponds en français, de façon concise et directe.
 
 Tu as accès à des outils pour interroger les données en temps réel :
@@ -62,7 +62,7 @@ _CHAT_TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
                 "n": {"type": "integer", "description": "Nombre de prédictions (max 20)", "default": 10},
             },
             "required": ["sport"],
@@ -74,7 +74,7 @@ _CHAT_TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
                 "days": {"type": "integer", "description": "Fenêtre en jours (ex: 30, 60, 90)", "default": 30},
             },
             "required": ["sport"],
@@ -86,7 +86,7 @@ _CHAT_TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
             },
             "required": ["sport"],
         },
@@ -97,7 +97,7 @@ _CHAT_TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
                 "days": {"type": "integer", "description": "Horizon en jours (défaut 7)", "default": 7},
             },
             "required": ["sport"],
@@ -196,7 +196,7 @@ def _tool_get_model_performance(sport: str, days: int = 30) -> dict:
         "summary": dict(summary) if summary else {},
         "weekly_trend": [dict(r) for r in weekly],
         "production_model": dict(model) if model else {},
-        "baselines": {"ligue1": 0.667, "nba": 0.25}.get(sport),
+        "baselines": {"ligue1": 0.667, "nba": 0.25, "france_nt": 0.667}.get(sport),
     }
 
 
