@@ -91,7 +91,7 @@ def run_odds_ingest(api_key: str) -> dict:
     provider = OddsAPIProvider(api_key)
     upserted = unmatched = 0
 
-    for sport in ("ligue1", "nba"):
+    for sport in ("ligue1", "nba", "france_nt"):
         try:
             odds_rows = provider.fetch_upcoming_odds(sport)
         except Exception as exc:

@@ -19,8 +19,10 @@ NBA features (21) :
   days_since_home_game, days_since_away_game,
   implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
 
-France NT features (19) :
+France NT features (28) :
   elo_home, elo_away, elo_diff,
+  dc_lam, dc_mu,
+  dc_p_home, dc_p_draw, dc_p_away,
   home_ppg_last5, home_conceded_last5, home_form_pts_last5,
   away_ppg_last5, away_conceded_last5, away_form_pts_last5,
   h2h_home_wins, h2h_draws, h2h_away_wins,
@@ -29,7 +31,8 @@ France NT features (19) :
   france_is_home,            [1 si France = équipe domicile]
   manager_id,                [0=Deschamps, à incrémenter lors d'un changement]
   n_starters_absent,         [absents vs dernier XI type]
-  starters_available_ratio   [défaut 1.0 sans données de dispo]
+  starters_available_ratio,  [défaut 1.0 sans données de dispo]
+  implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
 """
 
 from __future__ import annotations
@@ -71,6 +74,8 @@ NBA_FEATURES = [
 
 FRANCE_NT_FEATURES = [
     "elo_home", "elo_away", "elo_diff",
+    "dc_lam", "dc_mu",
+    "dc_p_home", "dc_p_draw", "dc_p_away",
     "home_ppg_last5", "home_conceded_last5", "home_form_pts_last5",
     "away_ppg_last5", "away_conceded_last5", "away_form_pts_last5",
     "h2h_home_wins", "h2h_draws", "h2h_away_wins",
@@ -80,6 +85,7 @@ FRANCE_NT_FEATURES = [
     "manager_id",
     "n_starters_absent",
     "starters_available_ratio",
+    "implied_prob_home", "implied_prob_draw", "implied_prob_away", "market_efficiency",
 ]
 
 # France NT team ID (API-Football)
@@ -310,21 +316,29 @@ def build_features_france_nt(
     competition: str,
     all_matches: list[dict],
     elo_state: EloState,
+    dc_model: Optional[DCModel] = None,
     n_starters_absent: int = 0,
     starters_available_ratio: float = 1.0,
     odds_home: Optional[float] = None,
     odds_draw: Optional[float] = None,
     odds_away: Optional[float] = None,
 ) -> tuple[list[float], list[str]]:
-    """Features pour l'Équipe de France NT (19 features, 3 classes).
+    """Features pour l'Équipe de France NT (28 features, 3 classes).
 
     home_team_id / away_team_id : tels que stockés en DB (API-Football IDs).
     competition : code interne (FRIENDLY, UEFA_UNL, FIFA_WCQ, FIFA_WC, UEFA_EC, UEFA_ECQ).
+    dc_model : modèle Dixon-Coles entraîné sur les matchs passés (None = valeurs par défaut).
     n_starters_absent : calculé depuis france_nt_lineups avant appel (défaut 0).
     starters_available_ratio : disponibles / 11 (défaut 1.0).
     """
     elo_h = elo_state.get(home_team_id)
     elo_a = elo_state.get(away_team_id)
+
+    lam, mu = 1.4, 1.1
+    p_home, p_draw, p_away = 1 / 3, 1 / 3, 1 / 3
+    if dc_model is not None and home_team_id in dc_model.attack and away_team_id in dc_model.attack:
+        lam, mu = dc_model.predict_goals(home_team_id, away_team_id)
+        p_home, p_draw, p_away = dc_model.predict_proba(home_team_id, away_team_id)
 
     h_ppg, h_con, h_pts = _rolling_pts_last5(home_team_id, match_date, all_matches)
     a_ppg, a_con, a_pts = _rolling_pts_last5(away_team_id, match_date, all_matches)
@@ -337,8 +351,12 @@ def build_features_france_nt(
     france_is_home = 1.0 if home_team_id == FRANCE_TEAM_ID else 0.0
     manager_id = _manager_id_france(match_date)
 
+    imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
+        lam, mu,
+        p_home, p_draw, p_away,
         h_ppg, h_con, h_pts,
         a_ppg, a_con, a_pts,
         h2h["h2h_home_wins"], h2h["h2h_draws"], h2h["h2h_away_wins"],
@@ -348,5 +366,6 @@ def build_features_france_nt(
         manager_id,
         float(n_starters_absent),
         starters_available_ratio,
+        imp_h, imp_d, imp_a, overround,
     ]
     return vec, FRANCE_NT_FEATURES

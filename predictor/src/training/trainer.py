@@ -185,8 +185,8 @@ def _build_rows_walkforward(
     """Construit les features en walk-forward (Elo et DC mis à jour après chaque match)."""
     X, y, dates = [], [], []
     for i, m in enumerate(matches):
-        # DC refit tous les ~30 jours (Ligue 1 uniquement)
-        if sport == "ligue1":
+        # DC refit tous les ~30 jours (Ligue 1 et France NT)
+        if sport in ("ligue1", "france_nt"):
             if (
                 dc_last_refit[0] is None
                 or (m["match_date"] - dc_last_refit[0]).days >= _DC_REFIT_INTERVAL_DAYS
@@ -213,12 +213,15 @@ def _build_rows_walkforward(
 
             if sport == "france_nt":
                 avail = (availability_by_fixture or {}).get(fixture_id, (0, 1.0))
+                dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
                 vec, _ = build_features_france_nt(
                     m["home_team_id"], m["away_team_id"],
                     m["match_date"], m.get("competition", "FRIENDLY"),
                     past, elo_state,
+                    dc_model=dc,
                     n_starters_absent=avail[0],
                     starters_available_ratio=avail[1],
+                    odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
                 )
             elif sport == "ligue1":
                 dc = dc_state[0] or DCModel(teams=[], attack={}, defense={}, home_advantage=1.3, rho=-0.1, converged=False)
@@ -353,7 +356,7 @@ def train_model(
 
     # DC final : fit sur 100 % des matchs terminés
     dc_for_artifact: DCModel | None = None
-    if sport == "ligue1":
+    if sport in ("ligue1", "france_nt"):
         teams_all = sorted({m["home_team_id"] for m in finished} | {m["away_team_id"] for m in finished})
         x0_for_final = dc_model_to_x0(dc_final[0], teams_all) if dc_final[0] else None
         dc_for_artifact = fit_dixon_coles(finished, x0=x0_for_final)

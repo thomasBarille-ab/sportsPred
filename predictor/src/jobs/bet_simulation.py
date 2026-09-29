@@ -35,7 +35,7 @@ def _best_ev(
         ev = p_home * odds_home - 1
         candidates.append(("home", odds_home, ev))
 
-    if sport == "ligue1" and odds_draw and odds_draw > 1 and p_draw is not None:
+    if sport in ("ligue1", "france_nt") and odds_draw and odds_draw > 1 and p_draw is not None:
         ev = p_draw * odds_draw - 1
         candidates.append(("draw", odds_draw, ev))
 
@@ -81,7 +81,8 @@ def _fetch_candidates() -> list[dict]:
 def _send_discord_alert(webhook_url: str, row: dict, bet_outcome: str, odds: float, ev_pct: float) -> None:
     """Envoie une alerte Discord pour un value bet significatif."""
     import httpx
-    sport_label = "⚽ Ligue 1" if row["sport"] == "ligue1" else "🏀 NBA"
+    _SPORT_LABELS = {"ligue1": "⚽ Ligue 1", "france_nt": "⚽ France NT", "nba": "🏀 NBA"}
+    sport_label = _SPORT_LABELS.get(row["sport"], row["sport"])
     outcome_label = {"home": "Victoire domicile", "draw": "Match nul", "away": "Victoire extérieur"}.get(bet_outcome, bet_outcome)
     content = (
         f"**Value Bet détecté** — {sport_label}\n"

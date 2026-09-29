@@ -1,4 +1,4 @@
-"""Client The Odds API v4 — cotes en temps réel pour Ligue 1 et NBA.
+"""Client The Odds API v4 — cotes en temps réel pour Ligue 1, NBA et France NT.
 
 Doc : https://the-odds-api.com/liveapi/guides/v4/
 Tier gratuit : 500 requêtes/mois (chaque match = 1 requête).
@@ -16,9 +16,18 @@ log = structlog.get_logger()
 
 _BASE_URL = "https://api.the-odds-api.com/v4"
 
-SPORT_KEYS: dict[str, str] = {
+# france_nt couvre plusieurs compétitions → liste de sport_keys
+SPORT_KEYS: dict[str, str | list[str]] = {
     "ligue1": "soccer_france_ligue_one",
     "nba": "basketball_nba",
+    "france_nt": [
+        "soccer_international_friendlies",
+        "soccer_europe_nations_league",
+        "soccer_world_cup_qual_europe",
+        "soccer_euro_qualification",
+        "soccer_fifa_world_cup",
+        "soccer_uefa_european_championship",
+    ],
 }
 
 # Ordre de préférence — Pinnacle est le bookmaker le plus "sharp" (meilleures implied proba)
@@ -41,12 +50,8 @@ class OddsAPIProvider:
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
-    def fetch_upcoming_odds(self, sport: str) -> list[OddsRow]:
-        """Retourne les cotes de tous les prochains matchs du sport."""
-        sport_key = SPORT_KEYS.get(sport)
-        if not sport_key:
-            raise ValueError(f"Sport non supporté par The Odds API : {sport!r}")
-
+    def _fetch_sport_key(self, sport: str, sport_key: str) -> list[OddsRow]:
+        """Fetch odds for a single sport_key string."""
         try:
             resp = httpx.get(
                 f"{_BASE_URL}/sports/{sport_key}/odds",
@@ -61,10 +66,10 @@ class OddsAPIProvider:
             )
             remaining = resp.headers.get("x-requests-remaining", "?")
             used = resp.headers.get("x-requests-used", "?")
-            log.info("odds_api.fetch", sport=sport, quota_remaining=remaining, quota_used=used)
+            log.info("odds_api.fetch", sport=sport, sport_key=sport_key, quota_remaining=remaining, quota_used=used)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            log.error("odds_api.http_error", status=exc.response.status_code, sport=sport)
+            log.error("odds_api.http_error", status=exc.response.status_code, sport=sport, sport_key=sport_key)
             raise
 
         results: list[OddsRow] = []
@@ -93,6 +98,23 @@ class OddsAPIProvider:
                         odds_draw=float(odds_draw_raw) if odds_draw_raw else None,
                         odds_away=float(odds_away),
                     ))
+        return results
+
+    def fetch_upcoming_odds(self, sport: str) -> list[OddsRow]:
+        """Retourne les cotes de tous les prochains matchs du sport."""
+        key_or_list = SPORT_KEYS.get(sport)
+        if not key_or_list:
+            raise ValueError(f"Sport non supporté par The Odds API : {sport!r}")
+
+        sport_keys = key_or_list if isinstance(key_or_list, list) else [key_or_list]
+
+        results: list[OddsRow] = []
+        for sk in sport_keys:
+            try:
+                results.extend(self._fetch_sport_key(sport, sk))
+            except httpx.HTTPStatusError:
+                # Erreur sur une compétition ne bloque pas les autres
+                continue
 
         n_events = len({(r.home_team, r.away_team) for r in results})
         log.info("odds_api.parsed", sport=sport, events=n_events, rows=len(results))

@@ -259,6 +259,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     fixture["home_team_id"], fixture["away_team_id"],
                     match_date, fixture.get("competition", "FRIENDLY"),
                     finished_list, elo_state,
+                    dc_model=dc_model,
                     n_starters_absent=n_absent,
                     starters_available_ratio=avail_ratio,
                     odds_home=odds_home, odds_draw=odds_draw, odds_away=odds_away,
