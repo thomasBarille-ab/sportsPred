@@ -24,6 +24,10 @@ _BASE   = "https://www.thesportsdb.com/api/v1/json/3"
 _TEAM   = 133913
 _TIMEOUT = 15
 
+# TheSportsDB league IDs for competitions France NT plays in
+_LEAGUE_NATIONS_LEAGUE = 4490
+_LEAGUES_FOR_BACKFILL = [_LEAGUE_NATIONS_LEAGUE]
+
 _COMP_MAP: dict[str, str] = {
     "uefa nations league":              "UEFA_UNL",
     "nations league":                   "UEFA_UNL",
@@ -178,4 +182,28 @@ class TheSportsDBClient:
             if dto:
                 out.append(dto)
         log.info("thesportsdb.season_fetched", league_id=league_id, season=season, n=len(out))
+        return out
+
+    def get_france_all_past(self, seasons_back: int = 4) -> list[FixtureDTO]:
+        """Agrège l'historique France NT : eventspast + Nations League sur `seasons_back` saisons.
+
+        Fallback quand API-Football n'est pas disponible. Retourne des FixtureDTO
+        dédupliqués par external_id. Utilisé pour le backfill.
+        """
+        current_year = date.today().year
+        # TheSportsDB uses "YYYY-YYYY" season format
+        seasons = [f"{y}-{y+1}" for y in range(current_year - seasons_back, current_year + 1)]
+
+        aggregated: dict[str, FixtureDTO] = {}
+
+        for fx in self.get_past_fixtures():
+            aggregated[fx.external_id] = fx
+
+        for league_id in _LEAGUES_FOR_BACKFILL:
+            for s in seasons:
+                for fx in self.get_season_fixtures(league_id, s):
+                    aggregated.setdefault(fx.external_id, fx)
+
+        out = list(aggregated.values())
+        log.info("thesportsdb.france_all_past_fetched", n=len(out), seasons=len(seasons))
         return out

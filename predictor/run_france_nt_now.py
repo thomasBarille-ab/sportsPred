@@ -47,24 +47,25 @@ log.info("step.migrations")
 from src.db.migrate import run_migrations
 run_migrations()
 
-# ── 2. Backfill historique si vide ────────────────────────────────────────────
-count = session.fetch_one("SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'france_nt'")
-if count and count["n"] == 0:
-    if not cfg.apifootball_api_key:
-        log.error("backfill.skip", reason="APIFOOTBALL_API_KEY non configuré")
-        sys.exit(1)
+# ── 2. Backfill historique si moins de 15 matchs terminés ─────────────────────
+finished = session.fetch_one(
+    "SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'france_nt' AND home_score IS NOT NULL"
+)
+n_finished = finished["n"] if finished else 0
+if n_finished < 15:
     import datetime
     from src.ingestion.france_nt import FranceNTProvider
     from src.jobs.france_nt_backfill import run_france_nt_backfill
 
-    log.info("backfill.start", message="Chargement historique 2018 → présent (peut prendre quelques minutes)")
-    provider = FranceNTProvider(cfg.apifootball_api_key)
+    log.info("backfill.start", n_finished_current=n_finished,
+             message="Chargement historique (API-Football si dispo, sinon TheSportsDB)")
+    provider = FranceNTProvider(cfg.apifootball_api_key or "")
     current_year = datetime.date.today().year
     seasons = [str(y) for y in range(2018, current_year + 1)]
     run_france_nt_backfill(provider, seasons, max_lineup_fetches=80)
     log.info("backfill.done")
 else:
-    log.info("backfill.skip", fixtures_existants=count["n"] if count else 0)
+    log.info("backfill.skip", matchs_terminés=n_finished)
 
 # ── 3. Ingest fixtures à venir (API-Football ou TheSportsDB en fallback) ──────
 log.info("ingest.start")
@@ -87,7 +88,7 @@ if not prod_model:
         "SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'france_nt' AND home_score IS NOT NULL"
     )
     n_finished = finished["n"] if finished else 0
-    if n_finished >= 30:
+    if n_finished >= 15:
         log.info("retrain.start", matchs_terminés=n_finished)
         from src.jobs.retrain import run_retrain
         result = run_retrain("france_nt", cfg.model_storage_path)
@@ -100,8 +101,8 @@ if not prod_model:
         log.error(
             "retrain.insufficient_data",
             matchs_terminés=n_finished,
-            minimum_requis=30,
-            message="Pas assez de données. Lance le backfill manuellement plusieurs jours de suite.",
+            minimum_requis=15,
+            message="Pas assez de données historiques disponibles via TheSportsDB.",
         )
         sys.exit(1)
 else:

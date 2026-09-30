@@ -100,6 +100,7 @@ class FranceNTProvider(DataProvider):
         self._client = ApiFootballClient(api_key)
         self._tsdb = TheSportsDBClient()
         self._apf_available: bool | None = None  # None = pas encore testé
+        self._tsdb_past_cache: list[FixtureDTO] | None = None
 
     def _test_apf_key(self) -> bool:
         """Vérifie que la clé API-Football est valide (résultat mis en cache)."""
@@ -153,14 +154,38 @@ class FranceNTProvider(DataProvider):
         log.info("france_nt.upcoming_fetched", source="thesportsdb", n=len(out))
         return out
 
-    def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
-        current_year = date.today().year
-        raw = self._client.get_france_fixtures(current_year)
+    def _tsdb_past(self) -> list[FixtureDTO]:
+        """Charge une fois l'historique TheSportsDB (eventspast + Nations League)."""
+        if self._tsdb_past_cache is None:
+            self._tsdb_past_cache = self._tsdb.get_france_all_past()
+        return self._tsdb_past_cache
 
+    def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
+        # ── Tentative API-Football ────────────────────────────────────────────
+        if self._test_apf_key():
+            current_year = date.today().year
+            raw = self._client.get_france_fixtures(current_year)
+            out = []
+            for match in raw:
+                dto = _to_fixture_dto(match)
+                if dto is None or dto.status != "FINISHED":
+                    continue
+                if from_date <= dto.match_date.date() <= to_date:
+                    out.append(ResultDTO(
+                        external_id=dto.external_id,
+                        sport=_SPORT,
+                        home_score=dto.home_score,  # type: ignore[arg-type]
+                        away_score=dto.away_score,  # type: ignore[arg-type]
+                        status="FINISHED",
+                    ))
+            if out:
+                log.info("france_nt.results_fetched", source="api_football", n=len(out))
+                return out
+
+        # ── Fallback TheSportsDB ──────────────────────────────────────────────
         out = []
-        for match in raw:
-            dto = _to_fixture_dto(match)
-            if dto is None or dto.status != "FINISHED":
+        for dto in self._tsdb_past():
+            if dto.status != "FINISHED":
                 continue
             if from_date <= dto.match_date.date() <= to_date:
                 out.append(ResultDTO(
@@ -170,14 +195,22 @@ class FranceNTProvider(DataProvider):
                     away_score=dto.away_score,  # type: ignore[arg-type]
                     status="FINISHED",
                 ))
-        log.info("france_nt.results_fetched", n=len(out))
+        log.info("france_nt.results_fetched", source="thesportsdb", n=len(out))
         return out
 
     def fetch_season_fixtures(self, season: str) -> list[FixtureDTO]:
         """season = année calendaire (ex: '2024')."""
-        raw = self._client.get_france_fixtures(int(season))
-        out = [dto for m in raw if (dto := _to_fixture_dto(m)) is not None]
-        log.info("france_nt.season_fetched", season=season, n=len(out))
+        # ── Tentative API-Football ────────────────────────────────────────────
+        if self._test_apf_key():
+            raw = self._client.get_france_fixtures(int(season))
+            out = [dto for m in raw if (dto := _to_fixture_dto(m)) is not None]
+            if out:
+                log.info("france_nt.season_fetched", source="api_football", season=season, n=len(out))
+                return out
+
+        # ── Fallback TheSportsDB ──────────────────────────────────────────────
+        out = [dto for dto in self._tsdb_past() if dto.season == season]
+        log.info("france_nt.season_fetched", source="thesportsdb", season=season, n=len(out))
         return out
 
     def fetch_lineups(self, external_id: str) -> list[dict]:
