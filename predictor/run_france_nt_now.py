@@ -119,7 +119,7 @@ preds = session.fetch_all(
     """
     SELECT f.home_team_name, f.away_team_name, f.match_date, f.competition,
            p.predicted_outcome, p.prob_home_win, p.prob_draw, p.prob_away_win,
-           p.confidence, p.explanation
+           GREATEST(p.prob_home_win, COALESCE(p.prob_draw, 0), p.prob_away_win) AS confidence
     FROM predictions p
     JOIN fixtures f ON f.id = p.fixture_id
     WHERE f.sport = 'france_nt'
@@ -157,7 +157,5 @@ for p in preds:
     print(f"  {p['home_team_name']}  vs  {p['away_team_name']}")
     print(f"  → {outcome}  (confiance {conf:.0%})")
     print(f"     Dom {ph:.0%}  |  Nul {pd_:.0%}  |  Ext {pa:.0%}")
-    if p["explanation"]:
-        print(f"     {p['explanation']}")
 print()
 print("=" * 60)
