@@ -21,7 +21,10 @@ from typing import Literal
 
 import joblib
 import numpy as np
+import structlog
 import xgboost as xgb
+
+log = structlog.get_logger()
 
 from ..features.builder import (
     FRANCE_NT_FEATURES,
@@ -52,14 +55,15 @@ HYPERPARAMS_NBA: dict = {
     "colsample_bytree": 0.8,
 }
 
-# Hyperparamètres renforcés pour France NT (~100 matchs) — régularisation forte
+# Hyperparamètres permissifs pour France NT (cold start : très peu de données) —
+# min_child_weight=1 pour permettre l'entraînement avec < 10 matchs.
 HYPERPARAMS_FRANCE_NT: dict = {
-    "n_estimators": 200,
+    "n_estimators": 100,
     "max_depth": 3,
     "learning_rate": 0.05,
     "subsample": 0.8,
     "colsample_bytree": 0.7,
-    "min_child_weight": 5,
+    "min_child_weight": 1,
     "gamma": 0.1,
     "reg_alpha": 0.1,
     "reg_lambda": 2.0,
@@ -84,6 +88,35 @@ class TrainResult:
 
 
 _THREE_CLASS_SPORTS = {"ligue1", "france_nt"}
+
+
+def _pad_missing_classes(
+    X: np.ndarray, y: np.ndarray, weights: np.ndarray, sport: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Complète le jeu d'entraînement pour couvrir les 3 classes attendues.
+
+    Nécessaire en cold start : quand < 10 matchs sont disponibles, il se peut
+    que certaines issues (draw, away win) ne soient pas représentées, ce qui
+    fait planter XGBoost multi:softprob (num_class=3).
+
+    Ajoute un échantillon synthétique neutre (moyenne des features, poids ~0)
+    pour chaque classe manquante.
+    """
+    if sport not in _THREE_CLASS_SPORTS or len(y) == 0:
+        return X, y, weights
+
+    present = set(y.tolist())
+    missing = {0, 1, 2} - present
+    if not missing:
+        return X, y, weights
+
+    neutral = X.mean(axis=0)
+    for cls in sorted(missing):
+        X = np.vstack([X, neutral])
+        y = np.append(y, cls)
+        weights = np.append(weights, 1e-6)
+    log.warning("training.class_padding", sport=sport, missing=sorted(missing), n_train=len(y))
+    return X, y, weights
 
 
 def _outcome_label(home_score: int, away_score: int, sport: str) -> int:
@@ -277,7 +310,7 @@ def train_model(
     Les métriques holdout sont calculées sur le modèle de validation (85 % des données),
     puis un modèle final est entraîné sur 100 % des données et sauvegardé.
     """
-    min_samples = 30 if sport == "france_nt" else 60
+    min_samples = 2 if sport == "france_nt" else 60
     finished = sorted(
         [m for m in all_matches if m.get("home_score") is not None],
         key=lambda x: x["match_date"],
@@ -314,8 +347,9 @@ def train_model(
         context_by_fixture=context_by_fixture,
     )
 
-    min_train = 20 if sport == "france_nt" else 40
-    if len(X_train) < min_train or len(X_test) < 5:
+    min_train = 1 if sport == "france_nt" else 40
+    min_test  = 1 if sport == "france_nt" else 5
+    if len(X_train) < min_train or len(X_test) < min_test:
         raise ValueError(
             f"Insufficient samples after feature build: train={len(X_train)}, test={len(X_test)}"
         )
@@ -335,6 +369,7 @@ def train_model(
 
     # ── Modèle de validation (métriques holdout) ──────────────────────────────
     val_model = _build_model(sport)
+    X_train_np, y_train_np, weights = _pad_missing_classes(X_train_np, y_train_np, weights, sport)
     val_model.fit(X_train_np, y_train_np, sample_weight=weights)
 
     proba = val_model.predict_proba(X_test_np)
@@ -361,6 +396,7 @@ def train_model(
     w_full    = _sample_weights(dates_full)
 
     final_model = _build_model(sport)
+    X_full_np, y_full_np, w_full = _pad_missing_classes(X_full_np, y_full_np, w_full, sport)
     final_model.fit(X_full_np, y_full_np, sample_weight=w_full)
 
     # DC final : fit sur 100 % des matchs terminés

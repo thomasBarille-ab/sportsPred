@@ -88,8 +88,8 @@ if not prod_model:
         "SELECT COUNT(*) AS n FROM fixtures WHERE sport = 'france_nt' AND home_score IS NOT NULL"
     )
     n_finished = finished["n"] if finished else 0
-    if n_finished >= 15:
-        log.info("retrain.start", matchs_terminés=n_finished)
+    if n_finished >= 2:
+        log.info("retrain.start", matchs_terminés=n_finished, note="cold start si < 15 matchs")
         from src.jobs.retrain import run_retrain
         result = run_retrain("france_nt", cfg.model_storage_path)
         if result.get("status") == "success":
@@ -101,8 +101,8 @@ if not prod_model:
         log.error(
             "retrain.insufficient_data",
             matchs_terminés=n_finished,
-            minimum_requis=15,
-            message="Pas assez de données historiques disponibles via TheSportsDB.",
+            minimum_requis=2,
+            message="Il faut au moins 2 matchs terminés en base.",
         )
         sys.exit(1)
 else:

@@ -76,6 +76,15 @@ def maybe_promote(
 
     Retourne True si promu, False sinon.
     """
+    champion = get_production_model(sport)
+
+    # Premier modèle : promotion automatique (peu importe la taille du holdout)
+    if champion is None:
+        _promote(sport, new_version_id)
+        log.info("champion_challenger.first_model_promoted", sport=sport, version_id=new_version_id)
+        return True
+
+    # Cas normal : exige un holdout suffisamment grand pour comparer challenger vs champion
     if holdout_samples < MIN_HOLDOUT_SAMPLES:
         log.warning(
             "champion_challenger.skip_promotion",
@@ -84,13 +93,6 @@ def maybe_promote(
             holdout_samples=holdout_samples,
         )
         return False
-
-    champion = get_production_model(sport)
-
-    if champion is None:
-        _promote(sport, new_version_id)
-        log.info("champion_challenger.first_model_promoted", sport=sport, version_id=new_version_id)
-        return True
 
     # Utilise le Brier apparié si disponible, sinon celui stocké en DB
     if champion_brier_override is not None:

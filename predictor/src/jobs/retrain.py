@@ -118,7 +118,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         for r in odds_rows:
             odds_by_fixture[r["fixture_id"]] = (r["odds_home"], r["odds_draw"], r["odds_away"])
 
-    min_required = 15 if sport == "france_nt" else 60
+    min_required = 2 if sport == "france_nt" else 60
     log.info(
         "retrain.données",
         sport=sport,
