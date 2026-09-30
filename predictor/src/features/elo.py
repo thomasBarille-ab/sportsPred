@@ -59,6 +59,9 @@ def build_elo_state(sport: str) -> EloState:
         return EloState(k_factor=32.0, home_advantage=65.0)
     elif sport == "nba":
         return EloState(k_factor=20.0, home_advantage=100.0)
+    elif sport == "france_nt":
+        # France NT : matchs internationaux, avantage domicile plus faible (terrain neutre courant)
+        return EloState(k_factor=24.0, home_advantage=40.0)
     raise ValueError(f"Unknown sport: {sport!r}")
 
 
