@@ -135,25 +135,32 @@ class TheSportsDBClient:
         return out
 
     def get_past_fixtures(self) -> list[FixtureDTO]:
-        """Retourne les derniers matchs terminés de l'Équipe de France."""
-        try:
-            resp = httpx.get(f"{_BASE}/eventspast.php", params={"id": _TEAM}, timeout=_TIMEOUT)
-            resp.raise_for_status()
-            events = resp.json().get("results") or []
-        except Exception as exc:
-            log.warning("thesportsdb.past_failed", error=str(exc))
-            return []
+        """Retourne les derniers matchs terminés de l'Équipe de France.
 
-        out = []
-        for e in events:
-            hs = e.get("intHomeScore")
-            as_ = e.get("intAwayScore")
-            status = "FINISHED" if (hs is not None and as_ is not None) else "SCHEDULED"
-            dto = _event_to_dto(e, status)
-            if dto:
-                out.append(dto)
-        log.info("thesportsdb.past_fetched", n=len(out))
-        return out
+        Essaie eventslast5.php en premier (endpoint actif sur le tier gratuit),
+        puis eventspast.php comme fallback legacy.
+        """
+        for endpoint in ("eventslast5.php", "eventspast.php"):
+            try:
+                resp = httpx.get(f"{_BASE}/{endpoint}", params={"id": _TEAM}, timeout=_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+                events = data.get("results") or data.get("events") or []
+                if events:
+                    out = []
+                    for e in events:
+                        hs = e.get("intHomeScore")
+                        as_ = e.get("intAwayScore")
+                        status = "FINISHED" if (hs is not None and as_ is not None) else "SCHEDULED"
+                        dto = _event_to_dto(e, status)
+                        if dto:
+                            out.append(dto)
+                    log.info("thesportsdb.past_fetched", endpoint=endpoint, n=len(out))
+                    return out
+            except Exception as exc:
+                log.warning("thesportsdb.past_failed", endpoint=endpoint, error=str(exc))
+
+        return []
 
     def get_season_fixtures(self, league_id: int, season: str) -> list[FixtureDTO]:
         """Retourne tous les matchs d'une saison pour une ligue donnée, filtrés pour la France."""
