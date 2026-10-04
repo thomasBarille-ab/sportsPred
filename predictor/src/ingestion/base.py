@@ -28,6 +28,10 @@ class ResultDTO:
     home_score: int
     away_score: int
     status: str         # 'FINISHED' | 'FINAL' etc.
+    # Optional: used as fallback when external_id doesn't match (provider swap apf_ ↔ tsdb_)
+    home_team_name: Optional[str] = None
+    away_team_name: Optional[str] = None
+    match_date: Optional[datetime] = None
 
 
 class DataProvider(ABC):

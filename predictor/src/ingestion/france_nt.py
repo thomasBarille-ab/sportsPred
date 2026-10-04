@@ -177,6 +177,9 @@ class FranceNTProvider(DataProvider):
                         home_score=dto.home_score,  # type: ignore[arg-type]
                         away_score=dto.away_score,  # type: ignore[arg-type]
                         status="FINISHED",
+                        home_team_name=dto.home_team_name,
+                        away_team_name=dto.away_team_name,
+                        match_date=dto.match_date,
                     ))
             if out:
                 log.info("france_nt.results_fetched", source="api_football", n=len(out))
@@ -194,6 +197,9 @@ class FranceNTProvider(DataProvider):
                     home_score=dto.home_score,  # type: ignore[arg-type]
                     away_score=dto.away_score,  # type: ignore[arg-type]
                     status="FINISHED",
+                    home_team_name=dto.home_team_name,
+                    away_team_name=dto.away_team_name,
+                    match_date=dto.match_date,
                 ))
         log.info("france_nt.results_fetched", source="thesportsdb", n=len(out))
         return out

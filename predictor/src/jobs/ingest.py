@@ -129,6 +129,31 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
                 "SELECT id FROM fixtures WHERE external_id = %s AND sport = %s",
                 (r.external_id, r.sport),
             )
+            # Fallback : l'external_id ne matche pas (swap apf_ ↔ tsdb_ entre deux ingestions)
+            if not fixture and r.home_team_name and r.away_team_name and r.match_date:
+                fixture = session.fetch_one(
+                    """
+                    SELECT id FROM fixtures
+                    WHERE sport = %s
+                      AND home_team_name = %s AND away_team_name = %s
+                      AND match_date::date = %s
+                    """,
+                    (r.sport, r.home_team_name, r.away_team_name, r.match_date.date()),
+                )
+                if fixture:
+                    session.execute(
+                        """
+                        UPDATE fixtures
+                        SET status = 'FINISHED', home_score = %s, away_score = %s, updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (r.home_score, r.away_score, fixture["id"]),
+                    )
+                    log.info(
+                        "ingest.fallback_par_équipes",
+                        sport=r.sport,
+                        match=f"{r.home_team_name} vs {r.away_team_name}",
+                    )
             if not fixture:
                 continue
             from ..scoring.metrics import outcome_from_scores
