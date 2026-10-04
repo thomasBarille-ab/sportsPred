@@ -203,12 +203,13 @@ export default async function FrancePage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-muted border-b border-border">
-                  <th className="text-left py-2 pr-4">Match</th>
-                  <th className="text-left py-2 pr-4">Date</th>
-                  <th className="text-center py-2 pr-4">Prédit</th>
-                  <th className="text-left py-2 pr-4">Probabilités</th>
+                  <th className="text-left py-2 pr-6">Match</th>
+                  <th className="text-left py-2 pr-6">Date</th>
+                  <th className="text-center py-2 pr-6">Prédit</th>
+                  <th className="text-left py-2 pr-6">Probabilités</th>
                   <th className="text-center py-2 pr-4">Résultat</th>
-                  <th className="text-right py-2">Brier</th>
+                  <th className="text-right py-2 pr-4">Brier</th>
+                  <th className="text-left py-2">Analyse</th>
                 </tr>
               </thead>
               <tbody>
@@ -229,23 +230,23 @@ export default async function FrancePage() {
                       key={i}
                       className={`border-b border-border/40 hover:bg-white/5 transition-colors ${rowBg}`}
                     >
-                      <td className="py-2.5 pr-4 font-medium whitespace-nowrap">
+                      <td className="py-2.5 pr-6 font-medium whitespace-nowrap">
                         {r.homeTeamName}{" "}
                         <span className="text-muted text-xs">vs</span>{" "}
                         {r.awayTeamName}
                       </td>
-                      <td className="py-2.5 pr-4 text-muted text-xs whitespace-nowrap">
+                      <td className="py-2.5 pr-6 text-muted text-xs whitespace-nowrap">
                         {isPast
                           ? format(matchDate, "dd MMM yyyy", { locale: fr })
                           : <span className="text-blue-400">{format(matchDate, "dd MMM HH:mm", { locale: fr })}</span>
                         }
                       </td>
-                      <td className="py-2.5 pr-4 text-center">
+                      <td className="py-2.5 pr-6 text-center">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${OUTCOME_STYLE[r.predictedOutcome] ?? ""}`}>
                           {OUTCOME_LABEL[r.predictedOutcome] ?? r.predictedOutcome}
                         </span>
                       </td>
-                      <td className="py-2.5 pr-4">
+                      <td className="py-2.5 pr-6">
                         <ProbStack probs={probs} />
                       </td>
                       <td className="py-2.5 pr-4 text-center">
@@ -258,8 +259,11 @@ export default async function FrancePage() {
                           <span className="text-muted text-xs">À jouer</span>
                         )}
                       </td>
-                      <td className="py-2.5 text-right text-muted text-xs font-mono tabular-nums">
+                      <td className="py-2.5 pr-4 text-right text-muted text-xs font-mono tabular-nums">
                         {r.brierScore != null ? Number(r.brierScore).toFixed(4) : "—"}
+                      </td>
+                      <td className="py-2.5 text-xs text-slate-400 max-w-xs">
+                        {r.explanation ?? <span className="text-muted/40">—</span>}
                       </td>
                     </tr>
                   );
