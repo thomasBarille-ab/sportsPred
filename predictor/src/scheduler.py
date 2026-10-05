@@ -24,6 +24,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .config import Settings
 from .db import session
+from .llm_client import get_metrics as get_llm_metrics, reset_metrics as reset_llm_metrics
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .ingestion.france_nt import FranceNTProvider
@@ -49,6 +50,7 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
         """,
         (job_name, sport, started),
     )
+    reset_llm_metrics()
     with capture_steps() as steps:
         try:
             result = fn(*args, **kwargs)
@@ -60,28 +62,48 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
             elif isinstance(result, int):
                 records = result
 
+            llm = get_llm_metrics()
             session.execute(
                 """
                 UPDATE agent_logs
                 SET status = 'success', finished_at = %s, duration_seconds = %s,
-                    records_processed = %s, details = %s
+                    records_processed = %s, details = %s,
+                    llm_tokens_input = %s, llm_tokens_output = %s,
+                    llm_cost_usd = %s, llm_latency_ms = %s
                 WHERE id = %s
                 """,
-                (finished, duration, records, json.dumps({"steps": steps}), log_id),
+                (
+                    finished, duration, records, json.dumps({"steps": steps}),
+                    llm["tokens_input"] or None,
+                    llm["tokens_output"] or None,
+                    round(llm["cost_usd"], 6) if llm["cost_usd"] else None,
+                    llm["latency_ms"] or None,
+                    log_id,
+                ),
             )
             log.info("job.success", job=job_name, sport=sport, duration=round(duration, 1))
         except Exception as exc:
             finished = datetime.now(timezone.utc)
             duration = (finished - started).total_seconds()
             err = traceback.format_exc()
+            llm = get_llm_metrics()
             session.execute(
                 """
                 UPDATE agent_logs
                 SET status = 'failed', finished_at = %s, duration_seconds = %s,
-                    error_message = %s, details = %s
+                    error_message = %s, details = %s,
+                    llm_tokens_input = %s, llm_tokens_output = %s,
+                    llm_cost_usd = %s, llm_latency_ms = %s
                 WHERE id = %s
                 """,
-                (finished, duration, err[:4000], json.dumps({"steps": steps}), log_id),
+                (
+                    finished, duration, err[:4000], json.dumps({"steps": steps}),
+                    llm["tokens_input"] or None,
+                    llm["tokens_output"] or None,
+                    round(llm["cost_usd"], 6) if llm["cost_usd"] else None,
+                    llm["latency_ms"] or None,
+                    log_id,
+                ),
             )
             log.error("job.failed", job=job_name, sport=sport, error=str(exc))
 
@@ -125,6 +147,11 @@ def _job_bet_simulation(cfg: Settings) -> None:
 
 def _job_odds_ingest(cfg: Settings) -> None:
     _log_job("odds_ingest", None, run_odds_ingest, cfg.odds_api_key)
+
+
+def _job_odds_closing(cfg: Settings) -> None:
+    """Cotes de clôture à ~H-1h des matchs (proxy 13:00 UTC)."""
+    _log_job("odds_closing", None, run_odds_ingest, cfg.odds_api_key, True)
 
 
 def _job_odds_backfill(cfg: Settings) -> None:
@@ -190,29 +217,61 @@ def _job_retrain(cfg: Settings) -> None:
 
 
 def _check_drift_and_retrain(cfg: Settings) -> None:
-    """Déclenche un retrain anticipé si les 2 derniers rapports d'agent recommandent un retrain."""
+    """Déclenche un retrain anticipé si les 2 derniers rapports d'agent recommandent un retrain.
+
+    Aussi déclenche un retrain no_odds si le rapport le plus récent recommande variant_to_test="no_odds"
+    et qu'aucun challenger no_odds n'a été entraîné dans les 7 derniers jours (garde-fou : 1x/semaine max).
+    """
     rows = session.fetch_all(
         """
-        SELECT agent_report
+        SELECT agent_report, summary_date
         FROM daily_summaries
         WHERE agent_report IS NOT NULL
         ORDER BY summary_date DESC
         LIMIT 2
         """
     )
-    if len(rows) < 2:
+    if not rows:
         return
-    recommended = [
-        bool(r["agent_report"].get("retrain_recommended"))
-        for r in rows
-        if isinstance(r["agent_report"], dict)
-    ]
-    if len(recommended) >= 2 and all(recommended[:2]):
-        log.warning(
-            "drift.retrain_triggered",
-            reason="2 rapports consécutifs recommandent un retrain",
+
+    # ── Vérification retrain standard ──────────────────────────────────────────
+    if len(rows) >= 2:
+        recommended = [
+            bool(r["agent_report"].get("retrain_recommended"))
+            for r in rows
+            if isinstance(r["agent_report"], dict)
+        ]
+        if len(recommended) >= 2 and all(recommended[:2]):
+            log.warning(
+                "drift.retrain_triggered",
+                reason="2 rapports consécutifs recommandent un retrain",
+            )
+            _job_retrain(cfg)
+
+    # ── Vérification retrain no_odds ───────────────────────────────────────────
+    latest_report = rows[0]["agent_report"] if isinstance(rows[0]["agent_report"], dict) else {}
+    if latest_report.get("variant_to_test") == "no_odds":
+        no_odds_recent = session.fetch_all(
+            """
+            SELECT id FROM model_versions
+            WHERE variant = 'no_odds'
+              AND trained_at >= NOW() - INTERVAL '7 days'
+            LIMIT 1
+            """
         )
-        _job_retrain(cfg)
+        if not no_odds_recent:
+            log.warning(
+                "drift.no_odds_retrain_triggered",
+                reason="Agent recommande variant_to_test=no_odds, aucun challenger récent",
+            )
+            try:
+                from .training.trainer import train_model
+                from .training.champion_challenger import register_model_version
+                from .jobs.retrain import _run_no_odds_variant
+                for sport in ("ligue1", "nba", "france_nt"):
+                    _run_no_odds_variant(sport, cfg.model_storage_path)
+            except Exception as exc:
+                log.error("drift.no_odds_retrain_failed", error=str(exc))
 
 
 def start_scheduler(cfg: Settings) -> None:
@@ -229,6 +288,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_odds_ingest(cfg),
         CronTrigger(hour=h % 24, minute=30),
         id="odds_ingest", name="Ingestion cotes The Odds API",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_odds_closing(cfg),
+        CronTrigger(hour=13, minute=0),
+        id="odds_closing", name="Cotes de clôture (proxy H-1h)",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(

@@ -72,6 +72,11 @@ HYPERPARAMS_FRANCE_NT: dict = {
 PIPELINE_VERSION = 5
 
 
+_NO_ODDS_FEATURES: frozenset[str] = frozenset({
+    "implied_prob_home", "implied_prob_draw", "implied_prob_away", "market_efficiency",
+})
+
+
 @dataclass
 class TrainResult:
     model: xgb.XGBClassifier
@@ -85,6 +90,7 @@ class TrainResult:
     model_path: str = ""
     X_test: np.ndarray = field(default_factory=lambda: np.array([]))
     y_test: np.ndarray = field(default_factory=lambda: np.array([]))
+    holdout_brier_scores: list[float] = field(default_factory=list)
 
 
 _THREE_CLASS_SPORTS = {"ligue1", "france_nt"}
@@ -161,6 +167,18 @@ def _build_model(sport: str) -> xgb.XGBClassifier:
         n_jobs=-1,
         **HYPERPARAMS_NBA,
     )
+
+
+def _per_match_brier(proba: np.ndarray, y: np.ndarray, sport: str) -> list[float]:
+    """Brier score individuel par match du holdout (nécessaire pour le bootstrap CI)."""
+    scores = []
+    for i in range(len(y)):
+        if sport in _THREE_CLASS_SPORTS:
+            s = sum((float(proba[i, k]) - (1.0 if y[i] == k else 0.0)) ** 2 for k in range(3))
+        else:
+            s = (float(proba[i, 1]) - float(y[i])) ** 2
+        scores.append(s)
+    return scores
 
 
 def _brier_multiclass(proba: np.ndarray, y: np.ndarray, n_classes: int) -> float:
@@ -276,8 +294,14 @@ def _build_rows_walkforward(
                     elo_state,
                     odds_home=odds_home, odds_away=odds_away,
                 )
-        except Exception:
-            # Met quand même à jour l'Elo avant de passer à la suite
+        except Exception as exc:
+            log.warning(
+                "trainer.row_skipped",
+                sport=sport,
+                fixture_id=m.get("id"),
+                match=f"{m.get('home_team_id')} vs {m.get('away_team_id')}",
+                error=str(exc),
+            )
             elo_state.update(m["home_team_id"], m["away_team_id"], m["home_score"], m["away_score"], sport)
             continue
 
@@ -303,6 +327,7 @@ def train_model(
     odds_by_fixture: dict[int, tuple] | None = None,
     availability_by_fixture: dict[int, tuple[int, float]] | None = None,
     context_by_fixture: dict[int, dict] | None = None,
+    variant: str = "standard",
 ) -> TrainResult:
     """Entraîne un nouveau modèle et retourne les métriques sur le holdout.
 
@@ -361,11 +386,18 @@ def train_model(
     weights    = _sample_weights(dates_train)
 
     if sport == "france_nt":
-        feature_names = FRANCE_NT_FEATURES
+        feature_names = list(FRANCE_NT_FEATURES)
     elif sport == "ligue1":
-        feature_names = LIGUE1_FEATURES
+        feature_names = list(LIGUE1_FEATURES)
     else:
-        feature_names = NBA_FEATURES
+        feature_names = list(NBA_FEATURES)
+
+    # ── Filtrage variant no-odds : retire les features marché ────────────────
+    if variant == "no_odds":
+        keep_indices = [i for i, f in enumerate(feature_names) if f not in _NO_ODDS_FEATURES]
+        feature_names = [feature_names[i] for i in keep_indices]
+        X_train_np = X_train_np[:, keep_indices]
+        X_test_np  = X_test_np[:, keep_indices]
 
     # ── Modèle de validation (métriques holdout) ──────────────────────────────
     val_model = _build_model(sport)
@@ -374,6 +406,23 @@ def train_model(
 
     proba = val_model.predict_proba(X_test_np)
     brier, ll, acc = _compute_metrics(proba, y_test_np, sport)
+
+    # ── Calibration isotonique sur le holdout ────────────────────────────────
+    from sklearn.isotonic import IsotonicRegression
+
+    per_match_brier = _per_match_brier(proba, y_test_np, sport)
+
+    calibrators: list[IsotonicRegression] = []
+    if sport in _THREE_CLASS_SPORTS:
+        for k in range(3):
+            y_k = (y_test_np == k).astype(float)
+            cal = IsotonicRegression(out_of_bounds="clip")
+            cal.fit(proba[:, k], y_k)
+            calibrators.append(cal)
+    else:
+        cal = IsotonicRegression(out_of_bounds="clip")
+        cal.fit(proba[:, 1], (y_test_np == 1).astype(float))
+        calibrators.append(cal)
 
     # ── Refit final sur 100 % des données ────────────────────────────────────
     # On rejoue le walk-forward complet sur all finished matches
@@ -395,6 +444,9 @@ def train_model(
     y_full_np = np.array(y_full)
     w_full    = _sample_weights(dates_full)
 
+    if variant == "no_odds":
+        X_full_np = X_full_np[:, keep_indices]
+
     final_model = _build_model(sport)
     X_full_np, y_full_np, w_full = _pad_missing_classes(X_full_np, y_full_np, w_full, sport)
     final_model.fit(X_full_np, y_full_np, sample_weight=w_full)
@@ -415,6 +467,7 @@ def train_model(
             "model": final_model,
             "feature_names": feature_names,
             "dc_model": dc_for_artifact,
+            "calibrators": calibrators,
             # L'Elo n'est plus stocké dans l'artefact (recalculé en live dans predict.py)
             "pipeline_version": PIPELINE_VERSION,
         },
@@ -433,6 +486,7 @@ def train_model(
         model_path=path,
         X_test=X_test_np,
         y_test=y_test_np,
+        holdout_brier_scores=per_match_brier,
     )
 
 

@@ -52,16 +52,17 @@ def search_team_context(
 
     date_str = match_date.strftime("%d/%m/%Y")
     sport_label = "football" if sport in ("ligue1", "france_nt") else sport
-    query = (
-        f"blessures absences suspensions {team_name} avant match {opponent_name} {date_str} {sport_label}"
-    )
 
     prompt = (
         f"Recherche les informations de disponibilité pour l'équipe '{team_name}' "
         f"avant leur match contre '{opponent_name}' le {date_str}.\n\n"
         f"Cherche : blessés, suspendus, joueurs incertains, signaux de rotation du coach.\n\n"
         f"Réponds UNIQUEMENT avec ce JSON (pas de markdown) :\n"
-        f'{{"absent_count": <int>, "rotation_signal": <true|false>, "summary": "<1 phrase>"}}'
+        f'{{"absent_count": <int>, '
+        f'"absent_players": [{{"name": "<nom>", "reason": "<blessure|suspension|incertain>"}}], '
+        f'"rotation_signal": <true|false>, '
+        f'"summary": "<1 phrase>", '
+        f'"sources": ["<url ou titre source>"]}}'
     )
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -85,12 +86,16 @@ def search_team_context(
                         return _parse_response(block.text.strip(), team_name)
                 break
 
+            if response.stop_reason == "pause_turn":
+                # Server-side web_search: results are injected server-side, no tool_result needed.
+                continue
+
             if response.stop_reason == "tool_use":
+                # Client-side tools only — web_search_20250305 is server-side so this
+                # branch is only reached for other tool types if added later.
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
-                        # web_search est géré nativement par Anthropic — le résultat
-                        # est injecté automatiquement dans la réponse suivante.
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -109,21 +114,34 @@ def search_team_context(
 
 
 def _parse_response(text: str, team_name: str) -> dict:
-    # Extrait le JSON même s'il y a du texte autour
     start = text.find("{")
     end   = text.rfind("}") + 1
     if start == -1 or end == 0:
         return _neutral(team_name)
     try:
         data = json.loads(text[start:end])
+        raw_players = data.get("absent_players", [])
+        absent_players = [
+            {"name": str(p.get("name", "")), "reason": str(p.get("reason", ""))}
+            for p in raw_players
+            if isinstance(p, dict) and p.get("name")
+        ]
         return {
-            "absent_count":     int(data.get("absent_count", 0)),
-            "rotation_signal":  bool(data.get("rotation_signal", False)),
-            "summary":          str(data.get("summary", "")),
+            "absent_count":    int(data.get("absent_count", len(absent_players))),
+            "absent_players":  absent_players,
+            "rotation_signal": bool(data.get("rotation_signal", False)),
+            "summary":         str(data.get("summary", "")),
+            "sources":         [str(s) for s in data.get("sources", [])],
         }
     except (json.JSONDecodeError, ValueError):
         return _neutral(team_name)
 
 
 def _neutral(team_name: str) -> dict:
-    return {"absent_count": 0, "rotation_signal": False, "summary": ""}
+    return {
+        "absent_count":    0,
+        "absent_players":  [],
+        "rotation_signal": False,
+        "summary":         "",
+        "sources":         [],
+    }

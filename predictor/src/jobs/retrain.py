@@ -32,7 +32,8 @@ def _score_champion_on_holdout(
     X_test: np.ndarray,
     y_test: np.ndarray,
     sport: str,
-) -> float | None:
+) -> tuple[float, list[float]] | None:
+    """Retourne (mean_brier, per_match_scores) ou None si champion legacy/incompatible."""
     """Score le champion sur le X_test du challenger.
 
     Retourne None si le champion est legacy (pas de pipeline_version >= 2)
@@ -75,15 +76,17 @@ def _score_champion_on_holdout(
         )
         return None
 
+    from ..training.trainer import _per_match_brier
     proba = artifact["model"].predict_proba(X_test)
     brier, ll, _ = _compute_metrics(proba, y_test, sport)
+    per_match = _per_match_brier(proba, y_test, sport)
     log.info(
         "retrain.champion_scored_on_challenger_holdout",
         sport=sport,
         champion_brier=round(brier, 5),
         champion_logloss=round(ll, 5),
     )
-    return brier
+    return brier, per_match
 
 
 def run_retrain(sport: str, model_storage_path: str) -> dict:
@@ -208,13 +211,12 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
     # ── Comparaison champion/challenger sur le MÊME holdout ──────────────────
     champion = get_production_model(sport)
     champion_brier_on_same_holdout: float | None = None
+    champion_per_match_scores: list[float] | None = None
 
     if champion:
-        champion_brier_on_same_holdout = _score_champion_on_holdout(
-            champion, result.X_test, result.y_test, sport
-        )
-
-        if champion_brier_on_same_holdout is not None:
+        scored = _score_champion_on_holdout(champion, result.X_test, result.y_test, sport)
+        if scored is not None:
+            champion_brier_on_same_holdout, champion_per_match_scores = scored
             delta = champion_brier_on_same_holdout - result.holdout_brier
             log.info(
                 "retrain.comparaison_champion_challenger",
@@ -223,7 +225,6 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
                 challenger_brier=round(result.holdout_brier, 5),
                 delta=f"{delta:+.5f}",
                 seuil=IMPROVEMENT_THRESHOLD,
-                verdict="challenger GAGNE" if delta >= IMPROVEMENT_THRESHOLD else f"champion conservé (delta {delta:.5f} < {IMPROVEMENT_THRESHOLD})",
             )
         else:
             log.info("retrain.champion_legacy", sport=sport,
@@ -276,7 +277,6 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
     except Exception as exc:
         log.warning("retrain.feature_importances_failed", sport=sport, error=str(exc))
 
-    # Si le champion est legacy → challenger promu automatiquement
     effective_champion_brier = (
         champion_brier_on_same_holdout
         if champion_brier_on_same_holdout is not None and champion
@@ -289,6 +289,9 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         result.holdout_brier,
         result.holdout_samples,
         champion_brier_override=effective_champion_brier,
+        challenger_brier_scores=result.holdout_brier_scores or None,
+        champion_brier_scores=champion_per_match_scores,
+        variant="standard",
     )
 
     log.info(
@@ -299,6 +302,15 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         action="Le nouveau modèle prend le relais" if promoted else "L'ancien modèle reste en production",
     )
 
+    # ── Variante no-odds : entraîne en parallèle pour comparaison ────────────
+    try:
+        _run_no_odds_variant(
+            sport, all_matches, model_storage_path,
+            odds_by_fixture, availability_by_fixture, context_by_fixture,
+        )
+    except Exception as exc:
+        log.warning("retrain.no_odds_variant_failed", sport=sport, error=str(exc))
+
     return {
         "status": "success",
         "version": version,
@@ -308,3 +320,73 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         "holdout_accuracy": result.holdout_accuracy,
         "promoted": promoted,
     }
+
+
+def _run_no_odds_variant(
+    sport: str,
+    all_matches: list[dict],
+    model_storage_path: str,
+    odds_by_fixture: dict,
+    availability_by_fixture: dict,
+    context_by_fixture: dict,
+) -> None:
+    """Entraîne et enregistre le variant no-odds pour comparaison. Jamais promu en prod."""
+    log.info("retrain.no_odds_variant.start", sport=sport)
+    result = train_model(
+        sport=sport,
+        all_matches=all_matches,
+        model_storage_path=model_storage_path,
+        odds_by_fixture=odds_by_fixture,
+        availability_by_fixture=availability_by_fixture if sport == "france_nt" else None,
+        context_by_fixture=context_by_fixture if context_by_fixture else None,
+        variant="no_odds",
+    )
+
+    from datetime import datetime, timezone
+    version = datetime.now(timezone.utc).strftime("v%Y%m%d_%H%M%S") + "_no_odds"
+    if sport == "france_nt":
+        _hp = HYPERPARAMS_FRANCE_NT
+    elif sport == "ligue1":
+        _hp = HYPERPARAMS_LIGUE1
+    else:
+        _hp = HYPERPARAMS_NBA
+    hyperparams = _hp.copy()
+    hyperparams["pipeline_version"] = PIPELINE_VERSION
+    hyperparams["variant"] = "no_odds"
+
+    version_id = register_model_version(
+        sport=sport,
+        version=version,
+        model_path=result.model_path,
+        training_samples=result.training_samples,
+        holdout_samples=result.holdout_samples,
+        holdout_brier=result.holdout_brier,
+        holdout_logloss=result.holdout_logloss,
+        holdout_accuracy=result.holdout_accuracy,
+        feature_names=result.feature_names,
+        hyperparameters=hyperparams,
+        variant="no_odds",
+    )
+
+    # Sauvegarde des importances de features du variant no-odds
+    try:
+        import psycopg2.extras
+        importances = result.model.feature_importances_
+        rows = [(version_id, sport, name, float(imp)) for name, imp in zip(result.feature_names, importances)]
+        with session.get_conn() as conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO feature_importances (model_version_id, sport, feature_name, importance) VALUES %s",
+                    rows,
+                )
+    except Exception as exc:
+        log.warning("retrain.no_odds_importances_failed", sport=sport, error=str(exc))
+
+    log.info(
+        "retrain.no_odds_variant.done",
+        sport=sport,
+        version=version,
+        holdout_brier=round(result.holdout_brier, 5),
+        note="Jamais promu en production — comparaison uniquement",
+    )

@@ -66,10 +66,21 @@ export default async function FrancePage() {
 
   return (
     <div className="space-y-8">
+      <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 flex items-start gap-3">
+        <span className="text-amber-400 text-sm font-semibold shrink-0 mt-0.5">Expérimental</span>
+        <p className="text-sm text-amber-200/80">
+          Modèle entraîné sur données limitées (peu de matchs internationaux disponibles en base).
+          Les prédictions sont indicatives — fiabilité inférieure à Ligue 1 / NBA.
+        </p>
+      </div>
+
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold">Équipe de France</h1>
         <span className="text-xs text-muted bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded">
           NT · france_nt
+        </span>
+        <span className="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded font-medium">
+          Expérimental
         </span>
       </div>
 

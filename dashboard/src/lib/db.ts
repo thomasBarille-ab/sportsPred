@@ -16,10 +16,11 @@ export default sql;
 export async function getOverviewStats(sport: string, days = 30) {
   const rows = await sql`
     SELECT
-      COUNT(ps.id)                                    AS total,
-      ROUND(AVG(ps.brier_score)::numeric, 4)          AS avg_brier,
-      ROUND(AVG(ps.log_loss)::numeric, 4)             AS avg_logloss,
-      ROUND(AVG(ps.is_correct::int::float)::numeric, 3) AS accuracy
+      COUNT(ps.id)                                             AS total,
+      ROUND(AVG(ps.brier_score)::numeric, 4)                  AS avg_brier,
+      ROUND(AVG(ps.log_loss)::numeric, 4)                     AS avg_logloss,
+      ROUND(AVG(ps.is_correct::int::float)::numeric, 3)        AS accuracy,
+      ROUND(AVG(ps.market_brier)::numeric, 4)                  AS avg_market_brier
     FROM prediction_scores ps
     JOIN fixtures f ON f.id = ps.fixture_id
     WHERE f.sport = ${sport}
@@ -97,22 +98,38 @@ export async function getModelVersions(sport: string) {
            ROUND(holdout_brier::numeric, 5)    AS holdout_brier,
            ROUND(holdout_logloss::numeric, 5)  AS holdout_logloss,
            ROUND(holdout_accuracy::numeric, 3) AS holdout_accuracy,
-           is_production
+           is_production,
+           COALESCE(variant, 'standard')       AS variant
     FROM model_versions
     WHERE sport = ${sport}
-    ORDER BY trained_at DESC
-    LIMIT 20
+    ORDER BY trained_at DESC, variant ASC
+    LIMIT 40
   `;
 }
 
 export async function getAgentLogs(limit = 50) {
   return sql`
     SELECT id, job_name, sport, started_at, finished_at,
-           status, duration_seconds, records_processed, error_message, details
+           status, duration_seconds, records_processed, error_message, details,
+           llm_tokens_input, llm_tokens_output, llm_cost_usd, llm_latency_ms
     FROM agent_logs
     ORDER BY started_at DESC
     LIMIT ${limit}
   `;
+}
+
+export async function getMonthlyCost() {
+  return sql`
+    SELECT
+      job_name,
+      SUM(llm_cost_usd)::numeric AS total_cost_usd,
+      COUNT(*)                   AS n_runs
+    FROM agent_logs
+    WHERE started_at >= DATE_TRUNC('month', NOW())
+      AND llm_cost_usd IS NOT NULL
+    GROUP BY job_name
+    ORDER BY total_cost_usd DESC
+  `.catch(() => []);
 }
 
 export async function getMatchdaySummary(sport: string) {

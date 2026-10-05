@@ -16,6 +16,7 @@ from typing import Any
 import structlog
 
 from ..db import session
+from ..db.queries import q_recent_predictions, q_failure_patterns, q_model_performance_trend
 
 log = structlog.get_logger()
 
@@ -39,8 +40,14 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans ``` ni texte 
   "patterns": ["Pattern détecté 1", "Pattern détecté 2"],
   "recommendations": ["Recommandation feature engineering 1", "Recommandation 2"],
   "retrain_recommended": false,
-  "retrain_reason": null
+  "retrain_reason": null,
+  "variant_to_test": null
 }
+
+Champ `variant_to_test` :
+- "no_odds" : si tu suspectes que les features de cotes dominent le signal et masquent des signaux structurels (ex: Brier modèle ≈ Brier marché sur plusieurs semaines, features de cotes très dominantes en importance).
+- "standard" : pour déclencher un retrain standard si drift détecté sans problème de cotes spécifique.
+- null : aucun retrain de variante spécifique recommandé.
 
 Les patterns doivent être concrets et actionnables (ex: "Le modèle rate les upsets quand away_b2b=1 : Brier moyen 0.58 vs 0.21 sur les prédictions correctes").
 """
@@ -52,7 +59,7 @@ _TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"], "description": "Sport à analyser"},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"], "description": "Sport à analyser"},
                 "n": {"type": "integer", "description": "Nombre de prédictions (max 30)", "default": 20},
             },
             "required": ["sport"],
@@ -64,7 +71,7 @@ _TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
                 "round": {"type": "integer", "description": "Numéro de la journée"},
             },
             "required": ["sport", "round"],
@@ -76,7 +83,7 @@ _TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
                 "days": {"type": "integer", "description": "Fenêtre temporelle en jours (ex: 30, 60)"},
             },
             "required": ["sport", "days"],
@@ -88,7 +95,7 @@ _TOOLS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "sport": {"type": "string", "enum": ["ligue1", "nba"]},
+                "sport": {"type": "string", "enum": ["ligue1", "nba", "france_nt"]},
             },
             "required": ["sport"],
         },
@@ -105,43 +112,21 @@ def _serialize(obj: Any) -> Any:
 
 
 def _tool_get_recent_predictions(sport: str, n: int = 20) -> list[dict]:
-    n = min(max(n, 1), 30)
-    rows = session.fetch_all(
-        """
-        SELECT f.home_team_name, f.away_team_name, f.match_date, f.round,
-               p.predicted_outcome,
-               ROUND(p.prob_home_win::numeric, 2) AS p_home,
-               ROUND(p.prob_draw::numeric, 2)     AS p_draw,
-               ROUND(p.prob_away_win::numeric, 2) AS p_away,
-               r.actual_outcome,
-               ps.is_correct,
-               ROUND(ps.brier_score::numeric, 4)  AS brier_score,
-               p.features_snapshot
-        FROM predictions p
-        JOIN fixtures f ON f.id = p.fixture_id
-        LEFT JOIN prediction_scores ps ON ps.prediction_id = p.id
-        LEFT JOIN results r ON r.fixture_id = p.fixture_id
-        WHERE f.sport = %s
-        ORDER BY f.match_date DESC
-        LIMIT %s
-        """,
-        (sport, n),
+    _KEY_FEATURES = (
+        "elo_diff", "home_form_pts_last5", "away_form_pts_last5",
+        "dc_p_home", "dc_p_draw", "dc_p_away",
+        "home_b2b", "away_b2b",
+        "home_win_rate_last10", "away_win_rate_last10",
     )
     result = []
-    for row in rows:
-        r = dict(row)
-        snapshot = r.pop("features_snapshot", None) or {}
-        r["key_features"] = {
+    for row in q_recent_predictions(sport, n):
+        snapshot = row.pop("features_snapshot", None) or {}
+        row["key_features"] = {
             k: round(float(v), 3) if isinstance(v, (int, float)) else v
             for k, v in snapshot.items()
-            if k in (
-                "elo_diff", "home_form_pts_last5", "away_form_pts_last5",
-                "dc_p_home", "dc_p_draw", "dc_p_away",
-                "home_b2b", "away_b2b",
-                "home_win_rate_last10", "away_win_rate_last10",
-            )
+            if k in _KEY_FEATURES
         }
-        result.append(r)
+        result.append(row)
     return result
 
 
@@ -169,89 +154,11 @@ def _tool_get_matchday_breakdown(sport: str, round: int) -> list[dict]:
 
 
 def _tool_get_model_performance_trend(sport: str, days: int) -> list[dict]:
-    days = min(max(days, 7), 365)
-    rows = session.fetch_all(
-        f"""
-        SELECT DATE_TRUNC('week', f.match_date)                     AS week,
-               COUNT(ps.id)                                          AS n,
-               ROUND(AVG(ps.brier_score)::numeric, 4)                AS avg_brier,
-               ROUND(AVG(ps.is_correct::int::float)::numeric, 3)    AS accuracy
-        FROM prediction_scores ps
-        JOIN fixtures f ON f.id = ps.fixture_id
-        WHERE f.sport = %s
-          AND f.match_date >= NOW() - INTERVAL '{days} days'
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        (sport,),
-    )
-    return [dict(r) for r in rows]
+    return q_model_performance_trend(sport, days)
 
 
 def _tool_get_failure_patterns(sport: str) -> dict:
-    rows = session.fetch_all(
-        """
-        SELECT
-            ps.is_correct,
-            COUNT(*)                                                 AS n,
-            ROUND(AVG((p.features_snapshot->>'elo_diff')::float)::numeric, 1)    AS avg_elo_diff,
-            ROUND(AVG(p.prob_home_win)::numeric, 3)                              AS avg_conf_home,
-            ROUND(MAX(p.prob_home_win)::numeric, 3)                              AS max_conf,
-            ROUND(MIN(p.prob_home_win)::numeric, 3)                              AS min_conf,
-            ROUND(AVG(ps.brier_score)::numeric, 4)                               AS avg_brier
-        FROM predictions p
-        JOIN prediction_scores ps ON ps.prediction_id = p.id
-        JOIN fixtures f ON f.id = p.fixture_id
-        WHERE f.sport = %s
-          AND p.features_snapshot IS NOT NULL
-        GROUP BY ps.is_correct
-        """,
-        (sport,),
-    )
-    # features spécifiques par sport
-    if sport == "ligue1":
-        extra = session.fetch_all(
-            """
-            SELECT
-                ps.is_correct,
-                ROUND(AVG((p.features_snapshot->>'home_form_pts_last5')::float)::numeric, 2) AS avg_home_form,
-                ROUND(AVG((p.features_snapshot->>'away_form_pts_last5')::float)::numeric, 2) AS avg_away_form,
-                ROUND(AVG((p.features_snapshot->>'home_b2b')::float)::numeric, 3)            AS avg_home_b2b,
-                ROUND(AVG((p.features_snapshot->>'away_b2b')::float)::numeric, 3)            AS avg_away_b2b
-            FROM predictions p
-            JOIN prediction_scores ps ON ps.prediction_id = p.id
-            JOIN fixtures f ON f.id = p.fixture_id
-            WHERE f.sport = %s AND p.features_snapshot IS NOT NULL
-            GROUP BY ps.is_correct
-            """,
-            (sport,),
-        )
-        extra_map = {r["is_correct"]: dict(r) for r in extra}
-    else:
-        extra = session.fetch_all(
-            """
-            SELECT
-                ps.is_correct,
-                ROUND(AVG((p.features_snapshot->>'home_win_rate_last10')::float)::numeric, 3) AS avg_home_wr,
-                ROUND(AVG((p.features_snapshot->>'away_win_rate_last10')::float)::numeric, 3) AS avg_away_wr,
-                ROUND(AVG((p.features_snapshot->>'home_b2b')::float)::numeric, 3)             AS avg_home_b2b,
-                ROUND(AVG((p.features_snapshot->>'away_b2b')::float)::numeric, 3)             AS avg_away_b2b
-            FROM predictions p
-            JOIN prediction_scores ps ON ps.prediction_id = p.id
-            JOIN fixtures f ON f.id = p.fixture_id
-            WHERE f.sport = %s AND p.features_snapshot IS NOT NULL
-            GROUP BY ps.is_correct
-            """,
-            (sport,),
-        )
-        extra_map = {r["is_correct"]: dict(r) for r in extra}
-
-    result = []
-    for row in rows:
-        r = dict(row)
-        r.update(extra_map.get(row["is_correct"], {}))
-        result.append(r)
-    return {"sport": sport, "patterns": result}
+    return {"sport": sport, "patterns": q_failure_patterns(sport)}
 
 
 def _execute_tool(name: str, inputs: dict) -> Any:

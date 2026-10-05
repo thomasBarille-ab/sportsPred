@@ -12,13 +12,32 @@ est automatiquement promu.
 from __future__ import annotations
 
 import structlog
+import numpy as np
 
 from ..db import session
 
 log = structlog.get_logger()
 
-IMPROVEMENT_THRESHOLD = 0.002  # amélioration minimum du Brier score pour la promotion
+IMPROVEMENT_THRESHOLD = 0.002  # fallback si holdout trop petit pour le bootstrap
 MIN_HOLDOUT_SAMPLES   = 50
+_BOOTSTRAP_N          = 1000
+_BOOTSTRAP_CONFIDENCE = 0.95
+
+
+def _bootstrap_brier_delta_ci(
+    challenger_scores: list[float],
+    champion_scores: list[float],
+) -> tuple[float, float]:
+    """IC bootstrap sur (champion_brier - challenger_brier) par match apparié.
+
+    Borne inférieure > 0 → challenger statistiquement meilleur à 95 %.
+    """
+    rng = np.random.default_rng(42)
+    diffs = np.array(champion_scores) - np.array(challenger_scores)
+    n = len(diffs)
+    samples = [float(rng.choice(diffs, size=n, replace=True).mean()) for _ in range(_BOOTSTRAP_N)]
+    alpha = (1 - _BOOTSTRAP_CONFIDENCE) / 2
+    return float(np.quantile(samples, alpha)), float(np.quantile(samples, 1 - alpha))
 
 
 def get_production_model(sport: str) -> dict | None:
@@ -39,6 +58,7 @@ def register_model_version(
     holdout_accuracy: float,
     feature_names: list[str],
     hyperparameters: dict,
+    variant: str = "standard",
 ) -> int:
     """Insère la version en DB et retourne son id."""
     import json
@@ -47,8 +67,8 @@ def register_model_version(
         INSERT INTO model_versions
           (sport, version, training_samples, holdout_samples,
            holdout_brier, holdout_logloss, holdout_accuracy,
-           is_production, model_path, feature_names, hyperparameters)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,FALSE,%s,%s,%s)
+           is_production, model_path, feature_names, hyperparameters, variant)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,FALSE,%s,%s,%s,%s)
         RETURNING id
         """,
         (
@@ -57,6 +77,7 @@ def register_model_version(
             model_path,
             json.dumps(feature_names),
             json.dumps(hyperparameters),
+            variant,
         ),
     )
 
@@ -67,24 +88,30 @@ def maybe_promote(
     new_brier: float,
     holdout_samples: int,
     champion_brier_override: float | None = None,
+    challenger_brier_scores: list[float] | None = None,
+    champion_brier_scores: list[float] | None = None,
+    variant: str = "standard",
 ) -> bool:
     """Promeut new_version_id si il bat le champion actuel.
 
-    `champion_brier_override` : Brier du champion scoré sur le MÊME holdout que
-    le challenger (fourni par retrain.py). Si None, utilise le brier stocké en DB
-    (moins fiable — holdouts potentiellement différents).
+    Utilise un test bootstrap apparié quand les scores par match sont disponibles
+    (IC 95 % doit exclure 0). Sinon, fallback sur le seuil fixe IMPROVEMENT_THRESHOLD.
 
-    Retourne True si promu, False sinon.
+    Seul variant='standard' peut devenir le modèle de production.
     """
+    # Le variant no-odds n'est jamais promu en production
+    if variant != "standard":
+        log.info("champion_challenger.no_odds_not_promoted", sport=sport, variant=variant)
+        return False
+
     champion = get_production_model(sport)
 
-    # Premier modèle : promotion automatique (peu importe la taille du holdout)
+    # Premier modèle : promotion automatique
     if champion is None:
         _promote(sport, new_version_id)
         log.info("champion_challenger.first_model_promoted", sport=sport, version_id=new_version_id)
         return True
 
-    # Cas normal : exige un holdout suffisamment grand pour comparer challenger vs champion
     if holdout_samples < MIN_HOLDOUT_SAMPLES:
         log.warning(
             "champion_challenger.skip_promotion",
@@ -94,7 +121,6 @@ def maybe_promote(
         )
         return False
 
-    # Utilise le Brier apparié si disponible, sinon celui stocké en DB
     if champion_brier_override is not None:
         champion_brier = champion_brier_override
         brier_source = "holdout_apparié"
@@ -104,29 +130,47 @@ def maybe_promote(
 
     delta = champion_brier - new_brier
 
-    log.info(
-        "champion_challenger.comparison",
-        sport=sport,
-        champion_id=champion["id"],
-        champion_brier=round(champion_brier, 5),
-        challenger_brier=round(new_brier, 5),
-        delta=round(delta, 5),
-        threshold=IMPROVEMENT_THRESHOLD,
-        brier_source=brier_source,
-    )
-
-    if delta >= IMPROVEMENT_THRESHOLD:
-        _promote(sport, new_version_id)
+    # ── Bootstrap CI si scores par match disponibles ─────────────────────────
+    promoted = False
+    if challenger_brier_scores and champion_brier_scores and len(challenger_brier_scores) == len(champion_brier_scores):
+        ci_low, ci_high = _bootstrap_brier_delta_ci(challenger_brier_scores, champion_brier_scores)
         log.info(
-            "champion_challenger.promoted",
+            "champion_challenger.bootstrap_comparison",
             sport=sport,
-            old_champion_id=champion["id"],
-            new_champion_id=new_version_id,
+            champion_id=champion["id"],
+            champion_brier=round(champion_brier, 5),
+            challenger_brier=round(new_brier, 5),
+            delta=round(delta, 5),
+            ci_95=f"[{ci_low:.5f}, {ci_high:.5f}]",
+            brier_source=brier_source,
+            verdict="challenger GAGNE" if ci_low > 0 else "champion conservé",
         )
-        return True
+        if ci_low > 0:
+            _promote(sport, new_version_id)
+            promoted = True
+    else:
+        # Fallback : seuil fixe
+        log.info(
+            "champion_challenger.fixed_threshold_comparison",
+            sport=sport,
+            champion_id=champion["id"],
+            champion_brier=round(champion_brier, 5),
+            challenger_brier=round(new_brier, 5),
+            delta=round(delta, 5),
+            threshold=IMPROVEMENT_THRESHOLD,
+            brier_source=brier_source,
+        )
+        if delta >= IMPROVEMENT_THRESHOLD:
+            _promote(sport, new_version_id)
+            promoted = True
 
-    log.info("champion_challenger.not_promoted", sport=sport, new_version_id=new_version_id)
-    return False
+    if promoted:
+        log.info("champion_challenger.promoted", sport=sport,
+                 old_champion_id=champion["id"], new_champion_id=new_version_id)
+    else:
+        log.info("champion_challenger.not_promoted", sport=sport, new_version_id=new_version_id)
+
+    return promoted
 
 
 def _promote(sport: str, version_id: int) -> None:

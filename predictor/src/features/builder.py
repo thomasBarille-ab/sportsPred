@@ -273,13 +273,13 @@ def build_features_ligue1(
 
     imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
 
-    ctx = context or {}
-    home_inj  = float(ctx.get("home_injuries_count", 0))
-    away_inj  = float(ctx.get("away_injuries_count", 0))
-    home_rot  = float(ctx.get("home_rotation_signal", False))
-    away_rot  = float(ctx.get("away_rotation_signal", False))
-    rain_mm   = float(ctx.get("weather_rain_mm", 0.0))
-    wind_kmh  = float(ctx.get("weather_wind_kmh", 0.0))
+    _nan = float("nan")
+    home_inj = float(context["home_injuries_count"]) if context and "home_injuries_count" in context else _nan
+    away_inj = float(context["away_injuries_count"]) if context and "away_injuries_count" in context else _nan
+    home_rot = float(context["home_rotation_signal"]) if context and "home_rotation_signal" in context else _nan
+    away_rot = float(context["away_rotation_signal"]) if context and "away_rotation_signal" in context else _nan
+    rain_mm  = float(context.get("weather_rain_mm", 0.0)) if context else 0.0
+    wind_kmh = float(context.get("weather_wind_kmh", 0.0)) if context else 0.0
 
     vec = [
         elo_h, elo_a, elo_h - elo_a,
@@ -380,13 +380,13 @@ def build_features_france_nt(
 
     imp_h, imp_d, imp_a, overround = _implied_probs_ligue1(odds_home, odds_draw, odds_away)
 
-    ctx = context or {}
-    home_inj  = float(ctx.get("home_injuries_count", 0))
-    away_inj  = float(ctx.get("away_injuries_count", 0))
-    home_rot  = float(ctx.get("home_rotation_signal", False))
-    away_rot  = float(ctx.get("away_rotation_signal", False))
-    rain_mm   = float(ctx.get("weather_rain_mm", 0.0))
-    wind_kmh  = float(ctx.get("weather_wind_kmh", 0.0))
+    _nan = float("nan")
+    home_inj = float(context["home_injuries_count"]) if context and "home_injuries_count" in context else _nan
+    away_inj = float(context["away_injuries_count"]) if context and "away_injuries_count" in context else _nan
+    home_rot = float(context["home_rotation_signal"]) if context and "home_rotation_signal" in context else _nan
+    away_rot = float(context["away_rotation_signal"]) if context and "away_rotation_signal" in context else _nan
+    rain_mm  = float(context.get("weather_rain_mm", 0.0)) if context else 0.0
+    wind_kmh = float(context.get("weather_wind_kmh", 0.0)) if context else 0.0
 
     vec = [
         elo_h, elo_a, elo_h - elo_a,

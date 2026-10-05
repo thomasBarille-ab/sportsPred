@@ -24,6 +24,7 @@ export default async function ModelsPage() {
               <tr className="text-muted border-b border-border">
                 <th className="text-left py-2 pr-4">Version</th>
                 <th className="text-left py-2 pr-4">Entraîné le</th>
+                <th className="text-left py-2 pr-4">Variante</th>
                 <th className="text-right py-2 pr-4">Train samples</th>
                 <th className="text-right py-2 pr-4">Holdout</th>
                 <th className="text-right py-2 pr-4">Brier ↓</th>
@@ -34,10 +35,19 @@ export default async function ModelsPage() {
             </thead>
             <tbody>
               {models.map((m: any) => (
-                <tr key={m.id} className="border-b border-border/50 hover:bg-white/5">
+                <tr key={m.id} className={`border-b border-border/50 hover:bg-white/5 ${m.variant === "no_odds" ? "opacity-70" : ""}`}>
                   <td className="py-2 pr-4 font-mono text-xs text-slate-300">{m.version}</td>
                   <td className="py-2 pr-4 text-muted">
                     {format(new Date(m.trainedAt), "dd MMM yyyy HH:mm", { locale: fr })}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {m.variant === "no_odds" ? (
+                      <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-medium whitespace-nowrap">
+                        sans cotes
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted">standard</span>
+                    )}
                   </td>
                   <td className="py-2 pr-4 text-right text-muted">{m.trainingSamples ?? "—"}</td>
                   <td className="py-2 pr-4 text-right text-muted">{m.holdoutSamples ?? "—"}</td>
@@ -100,8 +110,11 @@ export default async function ModelsPage() {
     <div className="space-y-8">
       <h1 className="text-2xl font-bold">Historique des modèles</h1>
       <p className="text-sm text-muted">
-        Un nouveau modèle n&apos;est promu en production que si son Brier score holdout
-        améliore le champion actuel d&apos;au moins 0.002.
+        Un nouveau modèle n&apos;est promu en production que si le bootstrap CI 95 % sur le
+        Brier apparié confirme qu&apos;il améliore strictement le champion actuel.
+        Les variantes <span className="font-mono text-xs bg-slate-800 px-1 rounded">sans cotes</span> ne
+        sont jamais promues en production — elles servent de référence pour détecter si
+        les features de marché apportent réellement du signal.
       </p>
       <p className="text-xs text-muted">
         Les modèles sans <code>pipeline_version ≥ 2</code> utilisent un ancien pipeline

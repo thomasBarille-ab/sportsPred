@@ -1,163 +1,60 @@
 # Sports Predictor
 
-Agent autonome de prédiction sportive pour la **Ligue 1** et la **NBA**.  
-Il ingère les données, entraîne des modèles ML, génère des prédictions et produit un résumé quotidien via un LLM local.
+ML pipeline for predicting football (Ligue 1, France NT) and NBA match outcomes, with daily automated inference, market comparison, and a Next.js dashboard.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  sports-dashboard                   │
-│         Next.js 14 · App Router · Tailwind          │
-│  / · /ligue1 · /nba · /models · /logs · /chat       │
-└───────────────────┬─────────────────────────────────┘
-                    │ REST (INTERNAL_API_TOKEN)
-┌───────────────────▼─────────────────────────────────┐
-│                   predictor                         │
-│     Python · APScheduler · XGBoost · Dixon-Coles    │
-│  ingest → features → train → predict → evaluate     │
-└──────────┬────────────────────────┬─────────────────┘
-           │ PostgreSQL             │ HTTP
-┌──────────▼──────────┐   ┌────────▼────────┐
-│   postgres-sports   │   │     ollama      │
-│   PostgreSQL 16     │   │  llama3.2:3b    │
-└─────────────────────┘   └─────────────────┘
+sports-predictor/
+├── predictor/          # Python service — ML, ingestion, scheduling
+│   └── src/
+│       ├── db/         # Postgres pool, migration runner, SQL files
+│       ├── ingestion/  # Data providers (football-data.org, balldontlie, API-Football)
+│       ├── features/   # Feature engineering (Elo, Dixon-Coles, rolling stats)
+│       ├── training/   # XGBoost training, champion/challenger promotion
+│       ├── scoring/    # Post-match metrics (Brier, log-loss, accuracy)
+│       ├── jobs/       # Orchestrated jobs: ingest, predict, evaluate, retrain
+│       ├── summaries/  # LLM agent analysis (Claude)
+│       └── scheduler.py
+├── dashboard/          # Next.js 14 App Router — visualization
+└── docker-compose.sports.yml
 ```
 
-Accès public via **Cloudflare Tunnel** (pas de port exposé en prod).
+## ML Pipeline
 
----
+**Features** are built in walk-forward fashion — no future data leaks into any feature at training time. Elo ratings and Dixon-Coles parameters are computed on a rolling basis using only matches prior to each sample.
 
-## Modèle de prédiction
+**Training** uses XGBoost (multi-class softprob for football, binary for NBA). The dataset is split chronologically 85/15 (train/holdout). After XGBoost, an isotonic regression calibrator is fitted on holdout probabilities per class to correct for systematic over/under-confidence.
 
-```
-  Données historiques (2 saisons)
-            │
-            ▼
-  ┌─────────────────────────────────────────────┐
-  │             Feature engineering             │
-  │                                             │
-  │  Elo         — force relative des équipes   │
-  │  Dixon-Coles — probabilités de buts (L1)    │
-  │  Forme       — 5/10 derniers matchs         │
-  │  Repos       — jours depuis dernier match   │
-  └──────────────────────┬──────────────────────┘
-                         │
-                         ▼
-  ┌─────────────────────────────────────────────┐
-  │         Entraînement walk-forward           │
-  │                                             │
-  │  passé ──────────────────► présent          │
-  │  [train]      [predict]   [update model]    │
-  │                                             │
-  │  Chaque ligne est prédite AVANT que         │
-  │  le modèle la voit → pas de fuite           │
-  └──────────────────────┬──────────────────────┘
-                         │
-            ┌────────────┴────────────┐
-            ▼                         ▼
-  ┌──────────────────┐     ┌──────────────────────┐
-  │  XGBoost L1      │     │  XGBoost NBA         │
-  │  3 classes       │     │  2 classes           │
-  │  home/draw/away  │     │  home/away           │
-  └────────┬─────────┘     └──────────┬───────────┘
-           └──────────┬───────────────┘
-                      ▼
-           Champion / Challenger
-           (nouveau modèle promu
-            seulement s'il fait
-            mieux sur le holdout)
-                      │
-                      ▼
-         Prédiction : probabilités
-         ex. Domicile 52% · Nul 24% · Extérieur 24%
-                      │
-                      ▼
-         Évaluation après le match
-         Brier score · Log-loss · Accuracy
-```
+**Champion/challenger** promotion: after each weekly retrain, the challenger's holdout Brier scores are tested against the current production model using a paired bootstrap (1 000 resamples, 95 % CI). The challenger is only promoted if the lower bound of the CI is strictly positive (challenger strictly better). If holdout samples are insufficient (< 50), falls back to a fixed 0.002 threshold.
 
----
+**No-odds variant**: every retrain also produces a `no_odds` variant that excludes implied-probability features derived from bookmaker odds. This variant is never promoted to production; it serves as a reference to quantify how much of the model's edge comes from market signal vs. structural features.
 
-## Prérequis
+## Daily Schedule (UTC)
 
-- Docker Desktop ≥ 24
-- Clé API gratuite [football-data.org](https://www.football-data.org/) (Ligue 1)
-- Clé API gratuite [balldontlie.io](https://app.balldontlie.io) (NBA)
+| Time | Job |
+|------|-----|
+| 06:00 | Ingest fixtures (Ligue 1, NBA, France NT) |
+| 06:30 | Ingest opening odds (The Odds API) |
+| 07:00 | Generate predictions + Claude explanations |
+| 07:10 | Bet simulation (EV filter ≥ 5%) |
+| 08:00 | Evaluate predictions (score settled matches) |
+| 09:00 | Agent analysis (Claude tool-use, failure patterns) |
+| 10:00 | Daily summary |
+| 13:00 | Ingest closing odds (proxy H-1h) |
+| 18:00 | Pre-match context agent (injuries, weather) |
+| Mon 03:00 | Weekly retrain (standard + no-odds variants) |
 
----
-
-## Démarrage rapide
+## Running locally
 
 ```bash
-cp .env.example .env
-# Renseigner FOOTBALL_DATA_API_KEY, BALLDONTLIE_API_KEY, POSTGRES_PASSWORD
-# Générer INTERNAL_API_TOKEN : openssl rand -hex 32
-# Ajouter AUTH_DISABLED=true pour le dev local
-
-docker compose -f docker-compose.sports.yml --env-file .env up -d
+docker compose -f docker-compose.sports.yml up -d
 ```
 
-Dashboard disponible sur **http://localhost:3000**.
+Migrations and backfills apply automatically on predictor startup.
 
-Au premier démarrage, le predictor charge automatiquement l'historique des deux dernières saisons et entraîne les modèles.  
-Ollama télécharge `llama3.2:3b` (~2 GB) en arrière-plan.
-
----
-
-## Pipeline automatique (UTC)
-
-| Heure | Job |
-|---|---|
-| 06:00 | Ingestion Ligue 1 + NBA |
-| 07:00 | Génération des prédictions |
-| 08:00 | Évaluation (Brier score, accuracy) |
-| 09:00 | Résumé quotidien Ollama |
-| lundi 03:00 | Réentraînement des modèles |
-
----
-
-## Dashboard
-
-| Page | Contenu |
-|---|---|
-| `/` | Vue d'ensemble des métriques |
-| `/ligue1` · `/nba` | Prédictions à venir + historique |
-| `/models` | Versions de modèles et performances |
-| `/logs` | Historique des jobs |
-| `/chat` | Chat avec l'agent — commandes `/ingest`, `/predict`, `/evaluate`, `/retrain`, `/summary` |
-
----
-
-## Variables d'environnement
-
-Voir `.env.example` pour la liste complète.  
-Les variables obligatoires sont `POSTGRES_PASSWORD`, `FOOTBALL_DATA_API_KEY`, `BALLDONTLIE_API_KEY` et `INTERNAL_API_TOKEN`.
-
----
-
-## Glossaire
-
-**Brier score** — mesure la précision des probabilités prédites. Plus il est bas, mieux c'est. Un modèle qui dit toujours "33%/33%/33%" obtient 0.667 en Ligue 1 — c'est la baseline à battre. Un modèle parfait obtiendrait 0.
-
-**Elo** — système de classement dynamique emprunté aux échecs. Chaque équipe a une note qui monte après une victoire et baisse après une défaite. L'écart de notes entre deux équipes sert de feature pour estimer leur force relative.
-
-**Dixon-Coles** — modèle statistique qui prédit les probabilités de chaque score possible (0-0, 1-0, 1-1…) en modélisant les buts comme des événements de Poisson. Utilisé uniquement en Ligue 1 où le nul existe.
-
-**Walk-forward** — méthode d'entraînement sans fuite de données : on entraîne le modèle uniquement sur le passé, on prédit le prochain match, puis on met à jour le modèle avec ce match avant de passer au suivant. Cela simule fidèlement les conditions réelles.
-
-**Champion/Challenger** — à chaque réentraînement, le nouveau modèle (challenger) est comparé au modèle actuel (champion) sur les mêmes données de test. Le challenger ne remplace le champion que s'il fait mieux — évite de dégrader les prédictions.
-
-**Holdout** — portion des données mise de côté et jamais vue pendant l'entraînement, utilisée uniquement pour mesurer les performances finales du modèle.
-
-**Log-loss** — autre mesure de qualité des probabilités, qui pénalise fortement les erreurs confiantes (dire "90% victoire domicile" quand l'équipe perd).
-
----
-
-## Déploiement en production
+## Tests
 
 ```bash
-# Mettre AUTH_DISABLED=false et renseigner CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD
-# Remplacer ports: par expose: dans docker-compose.sports.yml
-git push prod master
+cd predictor && python -m pytest tests/ -v
 ```

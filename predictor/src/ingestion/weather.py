@@ -60,6 +60,44 @@ def fetch_weather(lat: float, lon: float, match_dt: datetime) -> dict[str, float
         return {"temp_celsius": 15.0, "rain_mm": 0.0, "wind_kmh": 0.0}
 
 
+def fetch_historical_weather(lat: float, lon: float, match_dt: datetime) -> dict[str, float]:
+    """Alias explicite pour backfiller les matchs passés sans données météo.
+
+    Appelle toujours le endpoint archive d'Open-Meteo, indépendamment de la date.
+    """
+    match_date = match_dt.date() if hasattr(match_dt, "date") else match_dt
+
+    try:
+        resp = httpx.get(
+            _ARCHIVE_URL,
+            params={
+                "latitude":   lat,
+                "longitude":  lon,
+                "hourly":     "temperature_2m,rain,windspeed_10m",
+                "start_date": match_date.isoformat(),
+                "end_date":   match_date.isoformat(),
+                "timezone":   "UTC",
+            },
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        hours = data["hourly"]["time"]
+        target_h = match_dt.hour if hasattr(match_dt, "hour") else 15
+        idx = min(range(len(hours)), key=lambda i: abs(_parse_hour(hours[i]) - target_h))
+
+        return {
+            "temp_celsius": float(data["hourly"]["temperature_2m"][idx] or 0.0),
+            "rain_mm":      float(data["hourly"]["rain"][idx] or 0.0),
+            "wind_kmh":     float(data["hourly"]["windspeed_10m"][idx] or 0.0),
+        }
+
+    except Exception as exc:
+        log.warning("weather.historical_fetch_failed", lat=lat, lon=lon, error=str(exc))
+        return {"temp_celsius": 15.0, "rain_mm": 0.0, "wind_kmh": 0.0}
+
+
 def _parse_hour(time_str: str) -> int:
     """Extrait l'heure d'une chaîne ISO-8601 comme '2025-03-15T18:00'."""
     try:

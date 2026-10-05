@@ -43,6 +43,8 @@ type Log = {
   recordsProcessed: number | null;
   errorMessage: string | null;
   details: { steps?: Step[] } | null;
+  llmCostUsd: number | null;
+  llmLatencyMs: number | null;
 };
 
 export default function LogEntry({ log }: { log: Log }) {
@@ -94,6 +96,12 @@ export default function LogEntry({ log }: { log: Log }) {
         {log.recordsProcessed != null && (
           <span className="text-xs text-muted w-24 text-right flex-shrink-0">
             {log.recordsProcessed} records
+          </span>
+        )}
+
+        {log.llmCostUsd != null && (
+          <span className="text-xs text-violet-400 w-16 text-right flex-shrink-0 font-mono">
+            ${Number(log.llmCostUsd).toFixed(4)}
           </span>
         )}
 

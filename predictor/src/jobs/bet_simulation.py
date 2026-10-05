@@ -15,7 +15,7 @@ from ..db import session
 
 log = structlog.get_logger()
 
-_MIN_EV_PCT = 0.0   # seuil minimal pour créer une simulation
+_MIN_EV_PCT = 0.05  # seuil minimal pour créer une simulation (5 %)
 _DISCORD_EV_THRESHOLD = 0.08  # EV >= 8% → alerte Discord
 
 

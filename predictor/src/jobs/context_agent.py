@@ -109,19 +109,22 @@ def run_context_agent(anthropic_api_key: str) -> dict:
                      weather_temp_celsius, weather_rain_mm, weather_wind_kmh,
                      home_injuries_count, away_injuries_count,
                      home_rotation_signal, away_rotation_signal,
+                     home_absent_players, away_absent_players,
                      news_raw, llm_analysis)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (fixture_id) DO UPDATE SET
-                    agent_run_at         = EXCLUDED.agent_run_at,
-                    weather_temp_celsius = EXCLUDED.weather_temp_celsius,
-                    weather_rain_mm      = EXCLUDED.weather_rain_mm,
-                    weather_wind_kmh     = EXCLUDED.weather_wind_kmh,
-                    home_injuries_count  = EXCLUDED.home_injuries_count,
-                    away_injuries_count  = EXCLUDED.away_injuries_count,
-                    home_rotation_signal = EXCLUDED.home_rotation_signal,
-                    away_rotation_signal = EXCLUDED.away_rotation_signal,
-                    news_raw             = EXCLUDED.news_raw,
-                    llm_analysis         = EXCLUDED.llm_analysis
+                    agent_run_at          = EXCLUDED.agent_run_at,
+                    weather_temp_celsius  = EXCLUDED.weather_temp_celsius,
+                    weather_rain_mm       = EXCLUDED.weather_rain_mm,
+                    weather_wind_kmh      = EXCLUDED.weather_wind_kmh,
+                    home_injuries_count   = EXCLUDED.home_injuries_count,
+                    away_injuries_count   = EXCLUDED.away_injuries_count,
+                    home_rotation_signal  = EXCLUDED.home_rotation_signal,
+                    away_rotation_signal  = EXCLUDED.away_rotation_signal,
+                    home_absent_players   = EXCLUDED.home_absent_players,
+                    away_absent_players   = EXCLUDED.away_absent_players,
+                    news_raw              = EXCLUDED.news_raw,
+                    llm_analysis          = EXCLUDED.llm_analysis
                 """,
                 (
                     fixture_id,
@@ -133,6 +136,8 @@ def run_context_agent(anthropic_api_key: str) -> dict:
                     away_ctx["absent_count"],
                     home_ctx["rotation_signal"],
                     away_ctx["rotation_signal"],
+                    json.dumps(home_ctx.get("absent_players", [])),
+                    json.dumps(away_ctx.get("absent_players", [])),
                     json.dumps(news_raw),
                     json.dumps(llm_analysis),
                 ),

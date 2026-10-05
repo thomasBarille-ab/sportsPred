@@ -175,6 +175,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
     model         = artifact["model"]
     feature_names = artifact["feature_names"]
     dc_model      = artifact.get("dc_model")
+    calibrators   = artifact.get("calibrators")
 
     # Charge tous les matchs UNE seule fois
     all_matches = _get_all_matches_for_sport(sport)
@@ -309,7 +310,19 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
 
             aligned = _align_features(vec, built_names, feature_names)
             X     = np.array([aligned])
-            proba = model.predict_proba(X)[0]
+            proba = model.predict_proba(X)
+
+            # Calibration isotonique si disponible
+            if calibrators:
+                if sport in ("ligue1", "france_nt"):
+                    cal_p = np.column_stack([c.predict(proba[:, k]) for k, c in enumerate(calibrators)])
+                    row_sums = cal_p.sum(axis=1, keepdims=True)
+                    proba = cal_p / np.where(row_sums > 0, row_sums, 1.0)
+                else:
+                    p_home = calibrators[0].predict(proba[:, 1])
+                    proba = np.column_stack([1 - p_home, p_home])
+
+            proba = proba[0]
 
             if sport in ("ligue1", "france_nt"):
                 p_home, p_draw, p_away = float(proba[0]), float(proba[1]), float(proba[2])

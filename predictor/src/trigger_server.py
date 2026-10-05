@@ -1,30 +1,35 @@
-"""Serveur HTTP minimal pour déclencher les jobs à la demande et exposer un endpoint de chat.
+"""Serveur FastAPI pour déclencher les jobs à la demande et exposer un endpoint de chat.
 
 Tourne dans un thread daemon aux côtés d'APScheduler.
 
 Endpoints :
-  POST /run/<job_id>   — déclenche un job immédiatement
-  POST /chat           — chat avec l'agent Claude (tool use + DB)
+  POST /run/{job_id}   — déclenche un job immédiatement
+  POST /chat           — chat avec l'agent Claude (tool use + DB, SSE ou JSON)
+  GET  /docs           — documentation Swagger automatique
 
 Sécurité :
   Tous les POST requièrent l'en-tête X-Internal-Token égal à INTERNAL_API_TOKEN.
   Si la variable est absente, le serveur répond 503 (fail closed).
-  Commandes de job explicites uniquement : /ingest, /predict, /evaluate, /retrain, /summary.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import threading
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import structlog
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from .db import session
+from .db.queries import q_recent_predictions, q_failure_patterns, q_upcoming_fixtures
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.blocking import BlockingScheduler
@@ -32,8 +37,11 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
+app = FastAPI(title="Sports Predictor", version="1.0", docs_url="/docs")
+
 _ANTHROPIC_API_KEY: str = ""
 _INTERNAL_TOKEN:    str = ""
+_scheduler: "BlockingScheduler | None" = None
 
 _EXPLICIT_COMMANDS = {"/ingest", "/predict", "/evaluate", "/retrain", "/summary", "/context"}
 
@@ -106,23 +114,39 @@ _CHAT_TOOLS: list[dict] = [
     {
         "name": "get_value_bets",
         "description": "Paris à valeur positive (EV > 0) en attente de résultat, triés par EV décroissant.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_betting_performance",
         "description": "Statistiques globales des simulations de paris : win rate, P&L total, EV moyen.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
+        "input_schema": {"type": "object", "properties": {}},
     },
 ]
 
 
-# ── Implémentation des tools ──────────────────────────────────────────────────
+# ── Pydantic models ────────────────────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., max_length=4000)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=16)
+    stream: bool = False
+
+
+# ── Auth dependency ────────────────────────────────────────────────────────────
+
+def verify_token(x_internal_token: str = Header(default="")) -> None:
+    if not _INTERNAL_TOKEN:
+        raise HTTPException(503, detail="INTERNAL_API_TOKEN non configuré — serveur en mode fermé")
+    if not hmac.compare_digest(x_internal_token, _INTERNAL_TOKEN):
+        raise HTTPException(401, detail="Token invalide")
+
+
+# ── Tool helpers ───────────────────────────────────────────────────────────────
 
 def _serialize(obj: Any) -> Any:
     if isinstance(obj, (datetime, date)):
@@ -133,29 +157,10 @@ def _serialize(obj: Any) -> Any:
 
 
 def _tool_get_recent_predictions(sport: str, n: int = 10) -> list[dict]:
-    n = min(max(n, 1), 20)
-    rows = session.fetch_all(
-        """
-        SELECT f.home_team_name, f.away_team_name, f.match_date,
-               p.predicted_outcome,
-               ROUND(p.prob_home_win::numeric, 2) AS p_home,
-               ROUND(p.prob_draw::numeric, 2)     AS p_draw,
-               ROUND(p.prob_away_win::numeric, 2) AS p_away,
-               p.explanation,
-               r.actual_outcome,
-               ps.is_correct,
-               ROUND(ps.brier_score::numeric, 4)  AS brier_score
-        FROM predictions p
-        JOIN fixtures f ON f.id = p.fixture_id
-        LEFT JOIN prediction_scores ps ON ps.prediction_id = p.id
-        LEFT JOIN results r ON r.fixture_id = p.fixture_id
-        WHERE f.sport = %s
-        ORDER BY f.match_date DESC
-        LIMIT %s
-        """,
-        (sport, n),
-    )
-    return [dict(r) for r in rows]
+    rows = q_recent_predictions(sport, min(n, 20))
+    for row in rows:
+        row.pop("features_snapshot", None)
+    return rows
 
 
 def _tool_get_model_performance(sport: str, days: int = 30) -> dict:
@@ -201,53 +206,11 @@ def _tool_get_model_performance(sport: str, days: int = 30) -> dict:
 
 
 def _tool_get_failure_patterns(sport: str) -> dict:
-    rows = session.fetch_all(
-        """
-        SELECT ps.is_correct,
-               COUNT(*)                                                            AS n,
-               ROUND(AVG((p.features_snapshot->>'elo_diff')::float)::numeric, 1)  AS avg_elo_diff,
-               ROUND(AVG(ps.brier_score)::numeric, 4)                             AS avg_brier,
-               ROUND(AVG(p.prob_home_win)::numeric, 3)                            AS avg_conf_home
-        FROM predictions p
-        JOIN prediction_scores ps ON ps.prediction_id = p.id
-        JOIN fixtures f ON f.id = p.fixture_id
-        WHERE f.sport = %s AND p.features_snapshot IS NOT NULL
-        GROUP BY ps.is_correct
-        """,
-        (sport,),
-    )
-    return {"sport": sport, "patterns": [dict(r) for r in rows]}
+    return {"sport": sport, "patterns": q_failure_patterns(sport)}
 
 
 def _tool_get_upcoming_fixtures(sport: str, days: int = 7) -> list[dict]:
-    days = min(max(days, 1), 30)
-    rows = session.fetch_all(
-        """
-        SELECT f.home_team_name, f.away_team_name, f.match_date, f.round,
-               p.predicted_outcome,
-               ROUND(p.prob_home_win::numeric, 2) AS p_home,
-               ROUND(p.prob_draw::numeric, 2)     AS p_draw,
-               ROUND(p.prob_away_win::numeric, 2) AS p_away,
-               p.explanation,
-               mo.odds_home, mo.odds_draw, mo.odds_away, mo.bookmaker,
-               bs.ev_pct, bs.bet_outcome AS recommended_bet
-        FROM fixtures f
-        LEFT JOIN predictions p ON p.fixture_id = f.id
-        LEFT JOIN LATERAL (
-            SELECT odds_home, odds_draw, odds_away, bookmaker
-            FROM match_odds WHERE fixture_id = f.id
-            ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END, fetched_at DESC
-            LIMIT 1
-        ) mo ON true
-        LEFT JOIN bet_simulations bs ON bs.fixture_id = f.id
-        WHERE f.sport = %s
-          AND f.status IN ('SCHEDULED', 'TIMED')
-          AND f.match_date BETWEEN NOW() AND NOW() + (%s || ' days')::interval
-        ORDER BY f.match_date
-        """,
-        (sport, days),
-    )
-    return [dict(r) for r in rows]
+    return q_upcoming_fixtures(sport, days)
 
 
 def _tool_get_value_bets() -> list[dict]:
@@ -288,7 +251,7 @@ def _tool_get_betting_performance() -> dict:
     return dict(stats) if stats else {}
 
 
-def _execute_chat_tool(name: str, inputs: dict) -> Any:
+def _execute_tool(name: str, inputs: dict) -> Any:
     try:
         if name == "get_recent_predictions":
             return _tool_get_recent_predictions(inputs["sport"], inputs.get("n", 10))
@@ -308,10 +271,9 @@ def _execute_chat_tool(name: str, inputs: dict) -> Any:
         return {"error": str(exc)}
 
 
-# ── Agent Claude conversationnel ──────────────────────────────────────────────
+# ── Agent Claude helpers ───────────────────────────────────────────────────────
 
 def _run_tool_loop(client: Any, messages: list[dict]) -> list[dict]:
-    """Exécute la boucle tool use (non-streaming). Retourne messages mis à jour."""
     for _ in range(_CHAT_MAX_TURNS - 1):
         resp = client.messages.create(
             model=_CHAT_MODEL,
@@ -327,7 +289,7 @@ def _run_tool_loop(client: Any, messages: list[dict]) -> list[dict]:
         for block in resp.content:
             if block.type == "tool_use":
                 log.info("chat.tool_call", tool=block.name)
-                result = _execute_chat_tool(block.name, block.input)
+                result = _execute_tool(block.name, block.input)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -337,51 +299,16 @@ def _run_tool_loop(client: Any, messages: list[dict]) -> list[dict]:
     return messages
 
 
-def _stream_claude_agent(message: str, history: list[dict], send_event: Any) -> None:
-    """Agent Claude avec tool use (non-streaming) + réponse finale streamée."""
-    if not _ANTHROPIC_API_KEY:
-        send_event({"chunk": "[ANTHROPIC_API_KEY non configurée]"})
-        return
-    try:
-        import anthropic
-    except ImportError:
-        send_event({"chunk": "[Package anthropic non installé]"})
-        return
-
-    client = anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
-    messages: list[dict] = list(history[-8:]) + [{"role": "user", "content": message}]
-
-    try:
-        messages = _run_tool_loop(client, messages)
-        # Réponse finale streamée (sans tools = texte garanti)
-        with client.messages.stream(
-            model=_CHAT_MODEL,
-            max_tokens=_CHAT_MAX_TOKENS,
-            system=_CHAT_SYSTEM,
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                send_event({"chunk": text})
-    except Exception as exc:
-        log.error("chat.stream_error", error=str(exc))
-        send_event({"chunk": f"\n[Erreur : {exc}]"})
-
-
 def _call_claude_agent(message: str, history: list[dict]) -> str:
     if not _ANTHROPIC_API_KEY:
         return "[ANTHROPIC_API_KEY non configurée — chat Claude indisponible]"
-
     try:
         import anthropic
     except ImportError:
         return "[Package anthropic non installé]"
 
     client = anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
-
-    messages: list[dict] = []
-    for h in history[-8:]:
-        messages.append(h)
-    messages.append({"role": "user", "content": message})
+    messages = list(history) + [{"role": "user", "content": message}]
 
     try:
         for _ in range(_CHAT_MAX_TURNS):
@@ -392,7 +319,6 @@ def _call_claude_agent(message: str, history: list[dict]) -> str:
                 tools=_CHAT_TOOLS,
                 messages=messages,
             )
-
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn":
@@ -406,7 +332,7 @@ def _call_claude_agent(message: str, history: list[dict]) -> str:
                 for block in response.content:
                     if block.type == "tool_use":
                         log.info("chat.tool_call", tool=block.name)
-                        result = _execute_chat_tool(block.name, block.input)
+                        result = _execute_tool(block.name, block.input)
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -414,9 +340,7 @@ def _call_claude_agent(message: str, history: list[dict]) -> str:
                         })
                 messages.append({"role": "user", "content": tool_results})
                 continue
-
             break
-
     except Exception as exc:
         log.error("chat.claude_error", error=str(exc))
         return f"[Erreur Claude : {exc}]"
@@ -424,165 +348,100 @@ def _call_claude_agent(message: str, history: list[dict]) -> str:
     return "[Réponse non disponible]"
 
 
-# ── Handler HTTP ──────────────────────────────────────────────────────────────
+async def _stream_claude_agent(message: str, history: list[dict], action: str | None, action_note: str | None) -> AsyncIterator[str]:
+    if not _ANTHROPIC_API_KEY:
+        yield f"data: {json.dumps({'chunk': '[ANTHROPIC_API_KEY non configurée]'})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'action': action, 'action_note': action_note})}\n\n"
+        return
 
-def _check_token(handler: "BaseHTTPRequestHandler") -> bool:
-    if not _INTERNAL_TOKEN:
-        log.error("trigger_server.no_token_configured",
-                  hint="Définir INTERNAL_API_TOKEN dans l'environnement")
-        _send_json(handler, 503, {"error": "INTERNAL_API_TOKEN non configuré — serveur en mode fermé"})
-        return False
-    provided = handler.headers.get("X-Internal-Token", "")
-    if not hmac.compare_digest(provided, _INTERNAL_TOKEN):
-        log.warning("trigger_server.unauthorized", path=handler.path)
-        _send_json(handler, 401, {"error": "Token invalide"})
-        return False
-    return True
-
-
-def _send_json(handler: "BaseHTTPRequestHandler", code: int, body: dict) -> None:
-    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    handler.send_response(code)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(payload)))
-    handler.end_headers()
-    handler.wfile.write(payload)
-
-
-def _read_body(handler: "BaseHTTPRequestHandler", max_bytes: int = 65536) -> dict | None:
     try:
-        length = int(handler.headers.get("Content-Length", 0))
-    except ValueError:
-        length = 0
-    if length > max_bytes:
-        _send_json(handler, 413, {"error": "Body trop volumineux (max 64 Ko)"})
-        return None
-    raw = handler.rfile.read(length) if length else b"{}"
+        import anthropic
+    except ImportError:
+        yield f"data: {json.dumps({'chunk': '[Package anthropic non installé]'})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'action': action, 'action_note': action_note})}\n\n"
+        return
+
+    client = anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
+    messages = list(history) + [{"role": "user", "content": message}]
+
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        _send_json(handler, 400, {"error": "JSON invalide"})
-        return None
+        loop = asyncio.get_event_loop()
+        messages = await loop.run_in_executor(None, _run_tool_loop, client, messages)
+
+        with client.messages.stream(
+            model=_CHAT_MODEL,
+            max_tokens=_CHAT_MAX_TOKENS,
+            system=_CHAT_SYSTEM,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield f"data: {json.dumps({'chunk': text})}\n\n"
+
+    except Exception as exc:
+        log.error("chat.stream_error", error=str(exc))
+        yield f"data: {json.dumps({'chunk': f'[Erreur : {exc}]'})}\n\n"
+
+    yield f"data: {json.dumps({'done': True, 'action': action, 'action_note': action_note})}\n\n"
 
 
-class _TriggerHandler(BaseHTTPRequestHandler):
-    scheduler: "BlockingScheduler | None" = None
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
-    def do_POST(self) -> None:
-        if not _check_token(self):
-            return
-
-        parts = self.path.strip("/").split("/")
-
-        if parts[0] == "run":
-            self._handle_run(parts)
-        elif parts[0] == "chat":
-            self._handle_chat()
-        else:
-            _send_json(self, 404, {"error": "not found"})
-
-    def _handle_run(self, parts: list[str]) -> None:
-        if len(parts) < 2:
-            _send_json(self, 400, {"error": "usage: /run/<job_id>"})
-            return
-
-        job_id = parts[1]
-        scheduler = _TriggerHandler.scheduler
-        if scheduler is None:
-            _send_json(self, 503, {"error": "scheduler not ready"})
-            return
-
-        job = scheduler.get_job(job_id)
-        if job is None:
-            _send_json(self, 404, {"error": f"job inconnu: {job_id}"})
-            return
-
-        job.modify(next_run_time=datetime.now(timezone.utc))
-        log.info("trigger.job_lancé", job=job_id)
-        _send_json(self, 202, {"status": "accepted", "job": job_id})
-
-    def _handle_chat(self) -> None:
-        body = _read_body(self)
-        if body is None:
-            return
-
-        raw_message = body.get("message", "")
-        if not isinstance(raw_message, str):
-            _send_json(self, 400, {"error": "message doit être une chaîne"})
-            return
-        message = raw_message.strip()[:2000]
-
-        if not message:
-            _send_json(self, 400, {"error": "message vide"})
-            return
-
-        raw_history = body.get("history", [])
-        history: list[dict] = []
-        if isinstance(raw_history, list):
-            for item in raw_history[-8:]:
-                if (
-                    isinstance(item, dict)
-                    and item.get("role") in ("user", "assistant")
-                    and isinstance(item.get("content"), str)
-                ):
-                    history.append({
-                        "role": item["role"],
-                        "content": item["content"][:4000],
-                    })
-
-        # Commande explicite de job
-        action: str | None = None
-        action_note: str | None = None
-        stripped = message.lstrip()
-        if stripped in _EXPLICIT_COMMANDS:
-            job_id = stripped[1:]
-            scheduler = _TriggerHandler.scheduler
-            if scheduler:
-                job = scheduler.get_job(job_id)
-                if job:
-                    job.modify(next_run_time=datetime.now(timezone.utc))
-                    action = job_id
-                    action_note = "job lancé en arrière-plan"
-                    log.info("chat.command_triggered", action=job_id)
-
-        wants_stream = "text/event-stream" in self.headers.get("Accept", "")
-
-        if wants_stream:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-
-            def send_event(data: dict) -> None:
-                line = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                self.wfile.write(line.encode("utf-8"))
-                self.wfile.flush()
-
-            _stream_claude_agent(message, history, send_event)
-            send_event({"done": True, "action": action, "action_note": action_note})
-        else:
-            response = _call_claude_agent(message, history)
-            _send_json(self, 200, {
-                "response": response,
-                "action": action,
-                "action_note": action_note,
-            })
-
-    def log_message(self, *_: object) -> None:
-        pass
+@app.post("/run/{job_id}", dependencies=[Depends(verify_token)])
+async def run_job(job_id: str = Path(...)) -> dict:
+    if _scheduler is None:
+        raise HTTPException(503, detail="scheduler not ready")
+    job = _scheduler.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, detail=f"job inconnu: {job_id}")
+    job.modify(next_run_time=datetime.now(timezone.utc))
+    log.info("trigger.job_lancé", job=job_id)
+    return {"status": "accepted", "job": job_id}
 
 
-# ── Point d'entrée ────────────────────────────────────────────────────────────
+@app.post("/chat", dependencies=[Depends(verify_token)])
+async def chat(body: ChatRequest, request: Request) -> Any:
+    history = [{"role": m.role, "content": m.content} for m in body.history]
+    message = body.message
+
+    # Commande explicite de job
+    action: str | None = None
+    action_note: str | None = None
+    stripped = message.lstrip()
+    if stripped in _EXPLICIT_COMMANDS:
+        job_id = stripped[1:]
+        if _scheduler:
+            job = _scheduler.get_job(job_id)
+            if job:
+                job.modify(next_run_time=datetime.now(timezone.utc))
+                action = job_id
+                action_note = "job lancé en arrière-plan"
+                log.info("chat.command_triggered", action=job_id)
+
+    wants_stream = body.stream or "text/event-stream" in request.headers.get("accept", "")
+
+    if wants_stream:
+        return StreamingResponse(
+            _stream_claude_agent(message, history, action, action_note),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _call_claude_agent, message, history)
+    return {"response": response, "action": action, "action_note": action_note}
+
+
+# ── Launcher ──────────────────────────────────────────────────────────────────
 
 def start_trigger_server(
     scheduler: "BlockingScheduler",
     cfg: "Settings",
     port: int = 8080,
 ) -> None:
-    global _ANTHROPIC_API_KEY, _INTERNAL_TOKEN
+    global _ANTHROPIC_API_KEY, _INTERNAL_TOKEN, _scheduler
     _ANTHROPIC_API_KEY = cfg.anthropic_api_key or ""
     _INTERNAL_TOKEN    = cfg.internal_api_token
+    _scheduler         = scheduler
 
     if not _INTERNAL_TOKEN:
         log.error(
@@ -590,12 +449,17 @@ def start_trigger_server(
             hint="INTERNAL_API_TOKEN absent — tous les appels POST renverront 503. "
                  "Générer avec : openssl rand -hex 32",
         )
-
     if not _ANTHROPIC_API_KEY:
         log.warning("trigger_server.no_anthropic_key",
                     hint="Chat Claude indisponible — configurer ANTHROPIC_API_KEY")
 
-    _TriggerHandler.scheduler = scheduler
-    server = ThreadingHTTPServer(("0.0.0.0", port), _TriggerHandler)
-    threading.Thread(target=server.serve_forever, name="trigger-server", daemon=True).start()
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    thread = threading.Thread(
+        target=server.run,
+        name="trigger-server",
+        daemon=True,
+    )
+    thread.start()
     log.info("trigger_server.started", port=port, chat_backend="claude")

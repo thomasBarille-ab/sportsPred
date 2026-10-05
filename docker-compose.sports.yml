@@ -28,37 +28,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Ollama (LLM local, GPU GTX 1650) ──────────────────────────────────────
-  # Prérequis hôte : nvidia-container-toolkit installé + docker daemon configuré
-  # Vérifier : docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    volumes:
-      - ollama_models:/root/.ollama
-    networks:
-      - sports-net
-    # GPU passthrough — commenter les 6 lignes suivantes si pas de NVIDIA toolkit
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    # Pull du modèle au premier démarrage (idempotent, skip si déjà présent)
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        OLLAMA_PID=$$!
-        echo "Waiting for Ollama to be ready..."
-        until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do sleep 2; done
-        echo "Pulling ${OLLAMA_MODEL:-llama3.2:3b}..."
-        ollama pull ${OLLAMA_MODEL:-llama3.2:3b}
-        wait $$OLLAMA_PID
-
   # ── Predictor (Python — ingestion, features, ML) ──────────────────────────
   predictor:
     build:
@@ -69,15 +38,13 @@ services:
     depends_on:
       postgres-sports:
         condition: service_healthy
-      ollama:
-        condition: service_started
     environment:
       POSTGRES_URL: postgresql://sports:${POSTGRES_PASSWORD}@postgres-sports:5432/sports
       FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY}
       BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
       APIFOOTBALL_API_KEY: ${APIFOOTBALL_API_KEY:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_URL: ""
+      OLLAMA_MODEL: ""
       MODEL_STORAGE_PATH: /models
       INGESTION_HOUR_UTC: ${INGESTION_HOUR_UTC:-6}
       RETRAIN_WEEKDAY: ${RETRAIN_WEEKDAY:-mon}
@@ -115,14 +82,12 @@ services:
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
     networks:
       - sports-net
-    ports:
-      - "${DASHBOARD_PORT:-3000}:3000"
+    expose:
+      - "3000"
     # Cloudflared : créer un tunnel nommé "sports-dashboard" pointant sur ce container
-    # En prod, remplacer ports: par expose: et laisser cloudflared gérer l'accès
 
 volumes:
   postgres_sports_data:
-  ollama_models:
   predictor_models:
 
 networks:

@@ -1,10 +1,12 @@
 import Link from "next/link";
 
-const links = [
+type NavLink = { href: string; label: string; badge?: string };
+
+const links: NavLink[] = [
   { href: "/",        label: "Vue d'ensemble" },
   { href: "/ligue1",  label: "Ligue 1" },
   { href: "/nba",     label: "NBA" },
-  { href: "/france",  label: "France NT" },
+  { href: "/france",  label: "France NT", badge: "Expérimental" },
   { href: "/models",  label: "Modèles" },
   { href: "/logs",    label: "Logs" },
   { href: "/betting", label: "Paris" },
@@ -19,9 +21,14 @@ export default function Nav() {
         <Link
           key={l.href}
           href={l.href}
-          className="text-sm text-muted hover:text-white hover:bg-border/40 transition-colors rounded-lg px-3 py-2"
+          className="text-sm text-muted hover:text-white hover:bg-border/40 transition-colors rounded-lg px-3 py-2 flex items-center gap-2"
         >
-          {l.label}
+          <span>{l.label}</span>
+          {l.badge && (
+            <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded leading-none font-medium">
+              {l.badge}
+            </span>
+          )}
         </Link>
       ))}
     </nav>

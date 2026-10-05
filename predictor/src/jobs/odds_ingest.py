@@ -72,7 +72,7 @@ def _find_fixture_id(
     return best_id if best_score >= 0.8 else None
 
 
-def run_odds_ingest(api_key: str) -> dict:
+def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
     if not api_key:
         log.warning("odds_ingest.skipped", reason="ODDS_API_KEY non configurée")
         return {"upserted": 0, "unmatched": 0}
@@ -108,17 +108,17 @@ def run_odds_ingest(api_key: str) -> dict:
             session.execute(
                 """
                 INSERT INTO match_odds
-                    (fixture_id, bookmaker, market, odds_home, odds_draw, odds_away, source)
-                VALUES (%s, %s, 'h2h', %s, %s, %s, 'odds_api')
-                ON CONFLICT (fixture_id, bookmaker, market) DO UPDATE
+                    (fixture_id, bookmaker, market, odds_home, odds_draw, odds_away, source, closing)
+                VALUES (%s, %s, 'h2h', %s, %s, %s, 'odds_api', %s)
+                ON CONFLICT (fixture_id, bookmaker, market, closing) DO UPDATE
                   SET odds_home  = EXCLUDED.odds_home,
                       odds_draw  = EXCLUDED.odds_draw,
                       odds_away  = EXCLUDED.odds_away,
                       fetched_at = NOW()
                 """,
-                (fixture_id, row.bookmaker, row.odds_home, row.odds_draw, row.odds_away),
+                (fixture_id, row.bookmaker, row.odds_home, row.odds_draw, row.odds_away, closing),
             )
             upserted += 1
 
-    log.info("odds_ingest.done", upserted=upserted, unmatched=unmatched)
+    log.info("odds_ingest.done", upserted=upserted, unmatched=unmatched, closing=closing)
     return {"upserted": upserted, "unmatched": unmatched}

@@ -7,9 +7,53 @@ from __future__ import annotations
 import structlog
 
 from ..db import session
-from ..scoring.metrics import outcome_from_scores, score_prediction
+from ..scoring.metrics import brier_score, outcome_from_scores, score_prediction
 
 log = structlog.get_logger()
+
+
+def _market_brier(
+    fixture_id: int,
+    home_score: int,
+    away_score: int,
+    sport: str,
+) -> float | None:
+    """Calcule le Brier des probabilités implicites Pinnacle (de-juiced) pour ce match.
+
+    De-juicing : normalisation simple 1/odds. Retourne None si aucune cote disponible.
+    """
+    row = session.fetch_one(
+        """
+        SELECT odds_home, odds_draw, odds_away
+        FROM match_odds
+        WHERE fixture_id = %s
+        ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END, fetched_at DESC
+        LIMIT 1
+        """,
+        (fixture_id,),
+    )
+    if not row:
+        return None
+    try:
+        oh = float(row["odds_home"] or 0)
+        od = row["odds_draw"]
+        oa = float(row["odds_away"] or 0)
+        if oh <= 1 or oa <= 1:
+            return None
+        if od and float(od) > 1:
+            od_f = float(od)
+            total = 1 / oh + 1 / od_f + 1 / oa
+            p_home = (1 / oh) / total
+            p_draw = (1 / od_f) / total
+            p_away = (1 / oa) / total
+        else:
+            total = 1 / oh + 1 / oa
+            p_home = (1 / oh) / total
+            p_draw = None
+            p_away = (1 / oa) / total
+        return brier_score(p_home, p_draw, p_away, outcome_from_scores(home_score, away_score, sport), sport)
+    except (ZeroDivisionError, TypeError, ValueError):
+        return None
 
 
 def run_evaluate(sport: str) -> int:
@@ -60,11 +104,12 @@ def run_evaluate(sport: str) -> int:
                 actual_away_score=row["away_score"],
                 sport=sport,
             )
+            mkt_brier = _market_brier(row["fixture_id"], row["home_score"], row["away_score"], sport)
             session.execute(
                 """
                 INSERT INTO prediction_scores
-                  (prediction_id, fixture_id, brier_score, log_loss, is_correct)
-                VALUES (%s,%s,%s,%s,%s)
+                  (prediction_id, fixture_id, brier_score, log_loss, is_correct, market_brier)
+                VALUES (%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (prediction_id) DO NOTHING
                 """,
                 (
@@ -73,6 +118,7 @@ def run_evaluate(sport: str) -> int:
                     scores["brier_score"],
                     scores["log_loss"],
                     scores["is_correct"],
+                    mkt_brier,
                 ),
             )
 
@@ -145,13 +191,33 @@ def _settle_bets(sport: str) -> None:
         pnl = b["stake_units"] * (b["odds_taken"] - 1) if won else -b["stake_units"]
         status = "won" if won else "lost"
 
+        # CLV = (cote prise / cote de clôture) - 1
+        clv: float | None = None
+        closing_row = session.fetch_one(
+            """
+            SELECT odds_home, odds_draw, odds_away
+            FROM match_odds
+            WHERE fixture_id = %s AND closing = TRUE
+            ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (b["fixture_id"],),
+        )
+        if closing_row:
+            col_map = {"home": "odds_home", "draw": "odds_draw", "away": "odds_away"}
+            col = col_map.get(b["bet_outcome"])
+            if col:
+                closing_odd = closing_row.get(col)
+                if closing_odd and float(closing_odd) > 1:
+                    clv = round(float(b["odds_taken"]) / float(closing_odd) - 1, 4)
+
         session.execute(
             """
             UPDATE bet_simulations
-            SET status = %s, pnl_units = %s, settled_at = NOW()
+            SET status = %s, pnl_units = %s, clv = %s, settled_at = NOW()
             WHERE id = %s
             """,
-            (status, round(pnl, 4), b["id"]),
+            (status, round(pnl, 4), clv, b["id"]),
         )
         if won: n_won += 1
         else:   n_lost += 1
