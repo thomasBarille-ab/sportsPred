@@ -4,9 +4,12 @@ Chaîne de fallback (sans payer) :
   1. API-Football (100 req/j) — optionnel, si APIFOOTBALL_API_KEY est défini
   2. football-data.org (même clé que Ligue1, pas de quota journalier)
      → couvre Nations League, Coupe du Monde, Euro
-  3. TheSportsDB (gratuit, sans clé) — données limitées
+     ⚠ Nations League (UNL) non couverte sur le tier gratuit (403)
+  3. ESPN API non-officielle (gratuite, sans clé)
+     → couvre Nations League, Qualifs CM/Euro, matchs amicaux
+  4. TheSportsDB (gratuit, sans clé) — données en retard / endpoints 404
 
-external_id : 'apf_{id}' | 'fdo_{id}' | 'tsdb_{id}'
+external_id : 'apf_{id}' | 'fdo_{id}' | 'espn_{id}' | 'tsdb_{id}'
 """
 
 from __future__ import annotations
@@ -132,9 +135,13 @@ class FranceNTFDOProvider:
             )
             self._last_req = time.monotonic()
             if resp.status_code == 403:
+                log.warning("fdo_france_nt.comp_forbidden", path=path,
+                            hint="Competition hors du tier gratuit football-data.org")
                 return []
             resp.raise_for_status()
-            return resp.json().get("matches", [])
+            matches = resp.json().get("matches", [])
+            log.debug("fdo_france_nt.raw", path=path, params=params, n_total=len(matches))
+            return matches
         except Exception as exc:
             log.warning("fdo_france_nt.request_failed", path=path, error=str(exc))
             return []
@@ -226,10 +233,165 @@ class FranceNTFDOProvider:
         return out
 
 
+class FranceNTESPNProvider:
+    """ESPN API non-officielle — gratuite, sans clé.
+
+    Couvre Nations League, Qualifs CM/Euro, Euro, Coupe du Monde et amicaux.
+    Les slugs non reconnus retournent 404 et sont ignorés silencieusement.
+    """
+
+    _BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+
+    # (slug ESPN, code compétition interne)
+    _LEAGUES: list[tuple[str, str]] = [
+        ("uefa.nations",          "UEFA_UNL"),
+        ("fifa.worldq.europe",    "FIFA_WCQ"),
+        ("uefa.euro_qualifying",  "UEFA_ECQ"),
+        ("uefa.euro",             "UEFA_EC"),
+        ("fifa.world",            "FIFA_WC"),
+        ("intl.friendlies.m",     "FRIENDLY"),
+    ]
+
+    def _get_events(self, slug: str, from_date: date, to_date: date) -> list[dict]:
+        dates_param = f"{from_date.strftime('%Y%m%d')}-{to_date.strftime('%Y%m%d')}"
+        try:
+            resp = httpx.get(
+                f"{self._BASE}/{slug}/scoreboard",
+                params={"dates": dates_param, "limit": 100},
+                timeout=15,
+            )
+            if resp.status_code in (404, 400):
+                return []
+            if resp.status_code == 403:
+                log.debug("espn_france_nt.forbidden", slug=slug)
+                return []
+            resp.raise_for_status()
+            return resp.json().get("events", [])
+        except Exception as exc:
+            log.warning("espn_france_nt.request_failed", slug=slug, error=str(exc))
+            return []
+
+    @staticmethod
+    def _france_names(event: dict) -> tuple[str, str] | None:
+        """Retourne (home_name, away_name) si France participe, sinon None."""
+        for comp in event.get("competitions", []):
+            competitors = comp.get("competitors", [])
+            if len(competitors) < 2:
+                continue
+            home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+            away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+            if not home or not away:
+                continue
+            h_name = home.get("team", {}).get("displayName", "")
+            a_name = away.get("team", {}).get("displayName", "")
+            if "France" in h_name or "France" in a_name:
+                return h_name, a_name
+        return None
+
+    def _event_to_fixture_dto(self, event: dict, comp_code: str) -> Optional[FixtureDTO]:
+        try:
+            names = self._france_names(event)
+            if not names:
+                return None
+            home_name, away_name = names
+            comp = event["competitions"][0]
+            competitors = comp["competitors"]
+            home = next(c for c in competitors if c.get("homeAway") == "home")
+            away = next(c for c in competitors if c.get("homeAway") == "away")
+
+            completed = comp.get("status", {}).get("type", {}).get("completed", False)
+            status = "FINISHED" if completed else "SCHEDULED"
+            home_score: Optional[int] = None
+            away_score: Optional[int] = None
+            if completed:
+                hs = home.get("score")
+                as_ = away.get("score")
+                if hs is None or as_ is None:
+                    return None
+                home_score = int(hs)
+                away_score = int(as_)
+
+            dt = _parse_date(event.get("date", ""))
+            home_id = home.get("team", {}).get("id", home_name)
+            away_id = away.get("team", {}).get("id", away_name)
+
+            return FixtureDTO(
+                external_id=f"espn_{event['id']}",
+                sport=_SPORT,
+                home_team_id=str(home_id),
+                home_team_name=home_name,
+                away_team_id=str(away_id),
+                away_team_name=away_name,
+                match_date=dt,
+                season=str(dt.year),
+                competition=comp_code,
+                status=status,
+                home_score=home_score,
+                away_score=away_score,
+            )
+        except (KeyError, TypeError, ValueError, StopIteration) as exc:
+            log.debug("espn_france_nt.parse_error", error=str(exc))
+            return None
+
+    def fetch_upcoming_fixtures(self, from_date: date, to_date: date) -> list[FixtureDTO]:
+        out: list[FixtureDTO] = []
+        seen: set[str] = set()
+        for slug, comp_code in self._LEAGUES:
+            for event in self._get_events(slug, from_date, to_date):
+                dto = self._event_to_fixture_dto(event, comp_code)
+                if dto and dto.status != "FINISHED" and dto.external_id not in seen:
+                    out.append(dto)
+                    seen.add(dto.external_id)
+        log.info("espn_france_nt.upcoming_fetched", n=len(out))
+        return out
+
+    def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
+        out: list[ResultDTO] = []
+        seen: set[str] = set()
+        for slug, comp_code in self._LEAGUES:
+            for event in self._get_events(slug, from_date, to_date):
+                dto = self._event_to_fixture_dto(event, comp_code)
+                if (
+                    dto
+                    and dto.status == "FINISHED"
+                    and dto.home_score is not None
+                    and dto.away_score is not None
+                    and dto.external_id not in seen
+                ):
+                    out.append(ResultDTO(
+                        external_id=dto.external_id,
+                        sport=_SPORT,
+                        home_score=dto.home_score,
+                        away_score=dto.away_score,
+                        status="FINISHED",
+                        home_team_name=dto.home_team_name,
+                        away_team_name=dto.away_team_name,
+                        match_date=dto.match_date,
+                    ))
+                    seen.add(dto.external_id)
+        log.info("espn_france_nt.results_fetched", n=len(out))
+        return out
+
+    def fetch_season_fixtures(self, season: str) -> list[FixtureDTO]:
+        from_date = date(int(season), 1, 1)
+        to_date   = date(int(season), 12, 31)
+        out: list[FixtureDTO] = []
+        seen: set[str] = set()
+        for slug, comp_code in self._LEAGUES:
+            for event in self._get_events(slug, from_date, to_date):
+                dto = self._event_to_fixture_dto(event, comp_code)
+                if dto and dto.external_id not in seen:
+                    out.append(dto)
+                    seen.add(dto.external_id)
+        log.info("espn_france_nt.season_fetched", season=season, n=len(out))
+        return out
+
+
 class FranceNTProvider(DataProvider):
     def __init__(self, api_key: str, fdo_api_key: str = "") -> None:
         self._client = ApiFootballClient(api_key) if api_key else None
         self._fdo = FranceNTFDOProvider(fdo_api_key) if fdo_api_key else None
+        self._espn = FranceNTESPNProvider()
         self._tsdb = TheSportsDBClient()
         self._apf_available: bool | None = None
         self._tsdb_past_cache: list[FixtureDTO] | None = None
@@ -285,6 +447,12 @@ class FranceNTProvider(DataProvider):
                 log.info("france_nt.upcoming_fetched", source="football_data", n=len(out))
                 return out
 
+        # ── Fallback ESPN (non-officiel, gratuit) ─────────────────────────────
+        out = self._espn.fetch_upcoming_fixtures(from_date, to_date)
+        if out:
+            log.info("france_nt.upcoming_fetched", source="espn", n=len(out))
+            return out
+
         # ── Fallback TheSportsDB ──────────────────────────────────────────────
         log.info("france_nt.upcoming_fallback", source="thesportsdb")
         tsdb_fixtures = self._tsdb.get_next_fixtures()
@@ -333,6 +501,12 @@ class FranceNTProvider(DataProvider):
                 log.info("france_nt.results_fetched", source="football_data", n=len(out))
                 return out
 
+        # ── Fallback ESPN (non-officiel, gratuit) ─────────────────────────────
+        out = self._espn.fetch_recent_results(from_date, to_date)
+        if out:
+            log.info("france_nt.results_fetched", source="espn", n=len(out))
+            return out
+
         # ── Fallback TheSportsDB ──────────────────────────────────────────────
         out = []
         for dto in self._tsdb_past():
@@ -368,6 +542,12 @@ class FranceNTProvider(DataProvider):
             if out:
                 log.info("france_nt.season_fetched", source="football_data", season=season, n=len(out))
                 return out
+
+        # ── Fallback ESPN (non-officiel, gratuit) ─────────────────────────────
+        out = self._espn.fetch_season_fixtures(season)
+        if out:
+            log.info("france_nt.season_fetched", source="espn", season=season, n=len(out))
+            return out
 
         # ── Fallback TheSportsDB ──────────────────────────────────────────────
         out = [dto for dto in self._tsdb_past() if dto.season == season]
