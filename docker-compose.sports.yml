@@ -82,9 +82,10 @@ services:
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
     networks:
       - sports-net
+      - mediastack_defaultweb
     expose:
       - "3000"
-    # Cloudflared : créer un tunnel nommé "sports-dashboard" pointant sur ce container
+    # Caddy (mediastack_defaultweb) → sports-dashboard:3000
 
 volumes:
   postgres_sports_data:
@@ -93,5 +94,5 @@ volumes:
 networks:
   sports-net:
     driver: bridge
-    # Pour joindre ce réseau depuis d'autres containers de ton stack existant :
-    # ajoute "sports-net" dans leurs networks et déclare-le en external si besoin
+  mediastack_defaultweb:
+    external: true
