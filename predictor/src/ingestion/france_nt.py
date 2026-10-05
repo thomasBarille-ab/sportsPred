@@ -1,17 +1,21 @@
-"""Provider Équipe de France — implémente DataProvider via API-Football.
+"""Provider Équipe de France.
 
-France national team ID (API-Football) : 2.
-external_id format : 'apf_{fixture_id}'.
+Chaîne de fallback (sans payer) :
+  1. API-Football (100 req/j) — optionnel, si APIFOOTBALL_API_KEY est défini
+  2. football-data.org (même clé que Ligue1, pas de quota journalier)
+     → couvre Nations League, Coupe du Monde, Euro
+  3. TheSportsDB (gratuit, sans clé) — données limitées
 
-Fallback : si API-Football retourne une erreur d'authentification,
-TheSportsDB (gratuit, sans clé) est utilisé pour les fixtures à venir.
+external_id : 'apf_{id}' | 'fdo_{id}' | 'tsdb_{id}'
 """
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timezone
 from typing import Optional
 
+import httpx
 import structlog
 
 from .api_football import ApiFootballClient, FRANCE_TEAM_ID
@@ -95,15 +99,145 @@ def extract_apf_id(external_id: str) -> Optional[int]:
         return None
 
 
-class FranceNTProvider(DataProvider):
+class FranceNTFDOProvider:
+    """Résultats France NT via football-data.org — même clé que Ligue1, aucun quota journalier.
+
+    Couvre Nations League (UNL), Coupe du Monde (WC), Euro (EC).
+    Les compétitions absentes du tier gratuit retournent 403 et sont silencieusement ignorées.
+    """
+
+    _BASE_URL = "https://api.football-data.org/v4"
+    _RATE_LIMIT = 6.5  # 10 req/min
+
+    _COMPETITIONS: dict[str, str] = {
+        "UNL": "UEFA_UNL",
+        "WC":  "FIFA_WC",
+        "EC":  "UEFA_EC",
+    }
+
     def __init__(self, api_key: str) -> None:
-        self._client = ApiFootballClient(api_key)
+        self._headers = {"X-Auth-Token": api_key}
+        self._last_req: float = 0.0
+
+    def _get(self, path: str, params: dict) -> list[dict]:
+        elapsed = time.monotonic() - self._last_req
+        if elapsed < self._RATE_LIMIT:
+            time.sleep(self._RATE_LIMIT - elapsed)
+        try:
+            resp = httpx.get(
+                f"{self._BASE_URL}{path}",
+                headers=self._headers,
+                params=params,
+                timeout=30,
+            )
+            self._last_req = time.monotonic()
+            if resp.status_code == 403:
+                return []
+            resp.raise_for_status()
+            return resp.json().get("matches", [])
+        except Exception as exc:
+            log.warning("fdo_france_nt.request_failed", path=path, error=str(exc))
+            return []
+
+    @staticmethod
+    def _is_france(m: dict) -> bool:
+        return (
+            m.get("homeTeam", {}).get("name") == "France"
+            or m.get("awayTeam", {}).get("name") == "France"
+        )
+
+    def _to_dto(self, m: dict, comp_code: str) -> Optional[FixtureDTO]:
+        try:
+            score = m.get("score", {}).get("fullTime", {})
+            hs = score.get("home")
+            as_ = score.get("away")
+            status = m.get("status", "SCHEDULED")
+            if status == "FINISHED" and (hs is None or as_ is None):
+                return None
+            dt = _parse_date(m.get("utcDate") or "")
+            return FixtureDTO(
+                external_id=f"fdo_{m['id']}",
+                sport=_SPORT,
+                home_team_id=str(m["homeTeam"]["id"]),
+                home_team_name=m["homeTeam"]["name"],
+                away_team_id=str(m["awayTeam"]["id"]),
+                away_team_name=m["awayTeam"]["name"],
+                match_date=dt,
+                season=str(dt.year),
+                competition=self._COMPETITIONS.get(comp_code, "FRIENDLY"),
+                status=status,
+                home_score=int(hs) if hs is not None else None,
+                away_score=int(as_) if as_ is not None else None,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def fetch_upcoming_fixtures(self, from_date: date, to_date: date) -> list[FixtureDTO]:
+        out: list[FixtureDTO] = []
+        for comp in self._COMPETITIONS:
+            matches = self._get(
+                f"/competitions/{comp}/matches",
+                {"status": "SCHEDULED,TIMED", "dateFrom": from_date.isoformat(), "dateTo": to_date.isoformat()},
+            )
+            for m in matches:
+                if not self._is_france(m):
+                    continue
+                dto = self._to_dto(m, comp)
+                if dto:
+                    out.append(dto)
+        log.info("fdo_france_nt.upcoming_fetched", n=len(out))
+        return out
+
+    def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
+        out: list[ResultDTO] = []
+        for comp in self._COMPETITIONS:
+            matches = self._get(
+                f"/competitions/{comp}/matches",
+                {"status": "FINISHED", "dateFrom": from_date.isoformat(), "dateTo": to_date.isoformat()},
+            )
+            for m in matches:
+                if not self._is_france(m):
+                    continue
+                dto = self._to_dto(m, comp)
+                if dto and dto.home_score is not None and dto.away_score is not None:
+                    out.append(ResultDTO(
+                        external_id=dto.external_id,
+                        sport=_SPORT,
+                        home_score=dto.home_score,
+                        away_score=dto.away_score,
+                        status="FINISHED",
+                        home_team_name=dto.home_team_name,
+                        away_team_name=dto.away_team_name,
+                        match_date=dto.match_date,
+                    ))
+        log.info("fdo_france_nt.results_fetched", n=len(out))
+        return out
+
+    def fetch_season_fixtures(self, season: str) -> list[FixtureDTO]:
+        out: list[FixtureDTO] = []
+        for comp in self._COMPETITIONS:
+            matches = self._get(f"/competitions/{comp}/matches", {"season": season})
+            for m in matches:
+                if not self._is_france(m):
+                    continue
+                dto = self._to_dto(m, comp)
+                if dto:
+                    out.append(dto)
+        return out
+
+
+class FranceNTProvider(DataProvider):
+    def __init__(self, api_key: str, fdo_api_key: str = "") -> None:
+        self._client = ApiFootballClient(api_key) if api_key else None
+        self._fdo = FranceNTFDOProvider(fdo_api_key) if fdo_api_key else None
         self._tsdb = TheSportsDBClient()
-        self._apf_available: bool | None = None  # None = pas encore testé
+        self._apf_available: bool | None = None
         self._tsdb_past_cache: list[FixtureDTO] | None = None
 
     def _test_apf_key(self) -> bool:
         """Vérifie que la clé API-Football est valide (résultat mis en cache)."""
+        if self._client is None:
+            return False
         if self._apf_available is not None:
             return self._apf_available
         try:
@@ -142,6 +276,13 @@ class FranceNTProvider(DataProvider):
                     out.append(dto)
             if out:
                 log.info("france_nt.upcoming_fetched", source="api_football", n=len(out))
+                return out
+
+        # ── Fallback football-data.org ────────────────────────────────────────
+        if self._fdo:
+            out = self._fdo.fetch_upcoming_fixtures(from_date, to_date)
+            if out:
+                log.info("france_nt.upcoming_fetched", source="football_data", n=len(out))
                 return out
 
         # ── Fallback TheSportsDB ──────────────────────────────────────────────
@@ -185,6 +326,13 @@ class FranceNTProvider(DataProvider):
                 log.info("france_nt.results_fetched", source="api_football", n=len(out))
                 return out
 
+        # ── Fallback football-data.org ────────────────────────────────────────
+        if self._fdo:
+            out = self._fdo.fetch_recent_results(from_date, to_date)
+            if out:
+                log.info("france_nt.results_fetched", source="football_data", n=len(out))
+                return out
+
         # ── Fallback TheSportsDB ──────────────────────────────────────────────
         out = []
         for dto in self._tsdb_past():
@@ -212,6 +360,13 @@ class FranceNTProvider(DataProvider):
             out = [dto for m in raw if (dto := _to_fixture_dto(m)) is not None]
             if out:
                 log.info("france_nt.season_fetched", source="api_football", season=season, n=len(out))
+                return out
+
+        # ── Fallback football-data.org ────────────────────────────────────────
+        if self._fdo:
+            out = self._fdo.fetch_season_fixtures(season)
+            if out:
+                log.info("france_nt.season_fetched", source="football_data", season=season, n=len(out))
                 return out
 
         # ── Fallback TheSportsDB ──────────────────────────────────────────────

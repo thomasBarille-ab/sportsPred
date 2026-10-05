@@ -59,7 +59,7 @@ if n_finished < 15:
 
     log.info("backfill.start", n_finished_current=n_finished,
              message="Chargement historique (API-Football si dispo, sinon TheSportsDB)")
-    provider = FranceNTProvider(cfg.apifootball_api_key or "")
+    provider = FranceNTProvider(cfg.apifootball_api_key or "", cfg.football_data_api_key)
     current_year = datetime.date.today().year
     seasons = [str(y) for y in range(2018, current_year + 1)]
     run_france_nt_backfill(provider, seasons, max_lineup_fetches=80)
@@ -71,8 +71,7 @@ else:
 log.info("ingest.start")
 from src.ingestion.france_nt import FranceNTProvider
 from src.jobs.ingest import run_france_nt_ingest_and_lineups
-api_key = cfg.apifootball_api_key or ""
-provider = FranceNTProvider(api_key)
+provider = FranceNTProvider(cfg.apifootball_api_key or "", cfg.football_data_api_key)
 try:
     result = run_france_nt_ingest_and_lineups(provider, "france_nt")
     log.info("ingest.done", **result)

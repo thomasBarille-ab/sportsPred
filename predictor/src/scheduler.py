@@ -136,15 +136,12 @@ def _job_ingest(cfg: Settings) -> None:
     bdl = BallDontLieProvider(cfg.balldontlie_api_key)
     _log_job("ingest", "ligue1", ingest.run_ingest, fd, "ligue1")
     _log_job("ingest", "nba",    ingest.run_ingest, bdl, "nba")
-    if cfg.apifootball_api_key:
-        fnt = FranceNTProvider(cfg.apifootball_api_key)
-        _log_job("ingest", "france_nt", ingest.run_france_nt_ingest_and_lineups, fnt, "france_nt")
+    fnt = FranceNTProvider(cfg.apifootball_api_key or "", cfg.football_data_api_key)
+    _log_job("ingest", "france_nt", ingest.run_france_nt_ingest_and_lineups, fnt, "france_nt")
 
 
 def _job_predict(cfg: Settings) -> None:
-    sports = ["ligue1", "nba"]
-    if cfg.apifootball_api_key:
-        sports.append("france_nt")
+    sports = ["ligue1", "nba", "france_nt"]
     for sport in sports:
         # france_nt : horizon 10 jours — les matchs NT arrivent 1x/mois, on prédit dès que la fixture est en DB
         horizon = 240 if sport == "france_nt" else cfg.predict_horizon_hours
@@ -187,9 +184,7 @@ def _job_summary(cfg: Settings) -> None:
 
 
 def _job_retrain(cfg: Settings) -> None:
-    sports = ["ligue1", "nba"]
-    if cfg.apifootball_api_key:
-        sports.append("france_nt")
+    sports = ["ligue1", "nba", "france_nt"]
     for sport in sports:
         _log_job("retrain", sport, retrain.run_retrain, sport, cfg.model_storage_path)
 
