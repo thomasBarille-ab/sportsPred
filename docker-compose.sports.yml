@@ -80,12 +80,14 @@ services:
       CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
       CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
       AUTH_DISABLED: ${AUTH_DISABLED:-false}
+      HOSTNAME: "0.0.0.0"
     networks:
       - sports-net
-      - mediastack_defaultweb
+      - mediastack_default
+      - mediastack_sports-internal
     expose:
       - "3000"
-    # Caddy (mediastack_defaultweb) → sports-dashboard:3000
+    # Caddy (mediastack_default) → sports-dashboard:3000 → postgres-sports (mediastack_sports-internal)
 
 volumes:
   postgres_sports_data:
@@ -94,5 +96,7 @@ volumes:
 networks:
   sports-net:
     driver: bridge
-  mediastack_defaultweb:
+  mediastack_default:
+    external: true
+  mediastack_sports-internal:
     external: true
