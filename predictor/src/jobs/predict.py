@@ -15,6 +15,7 @@ import structlog
 from ..db import session
 from ..features.builder import build_features_france_nt, build_features_ligue1, build_features_nba
 from ..features.elo import build_elo_state, compute_elo_ratings
+from ..llm_client import create_message
 
 log = structlog.get_logger()
 
@@ -78,7 +79,8 @@ def _generate_explanation(
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        response = create_message(
+            client,
             model=_EXPLANATION_MODEL,
             max_tokens=_EXPLANATION_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],

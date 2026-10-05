@@ -17,6 +17,7 @@ import structlog
 
 from ..db import session
 from ..db.queries import q_recent_predictions, q_failure_patterns, q_model_performance_trend
+from ..llm_client import create_message
 
 log = structlog.get_logger()
 
@@ -200,7 +201,8 @@ def run_agent_analysis(api_key: str) -> dict | None:
 
     try:
         for turn in range(_MAX_TURNS):
-            response = client.messages.create(
+            response = create_message(
+                client,
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
                 system=_SYSTEM_PROMPT,

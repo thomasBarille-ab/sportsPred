@@ -13,6 +13,8 @@ from datetime import datetime
 
 import structlog
 
+from ..llm_client import create_message
+
 log = structlog.get_logger()
 
 _MODEL = "claude-haiku-4-5-20251001"
@@ -70,7 +72,8 @@ def search_team_context(
 
     try:
         for _ in range(_MAX_TURNS):
-            response = client.messages.create(
+            response = create_message(
+                client,
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
                 system=_SYSTEM,

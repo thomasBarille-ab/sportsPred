@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from .db import session
 from .db.queries import q_recent_predictions, q_failure_patterns, q_upcoming_fixtures
+from .llm_client import create_message
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.blocking import BlockingScheduler
@@ -275,7 +276,8 @@ def _execute_tool(name: str, inputs: dict) -> Any:
 
 def _run_tool_loop(client: Any, messages: list[dict]) -> list[dict]:
     for _ in range(_CHAT_MAX_TURNS - 1):
-        resp = client.messages.create(
+        resp = create_message(
+            client,
             model=_CHAT_MODEL,
             max_tokens=256,
             system=_CHAT_SYSTEM,
@@ -312,7 +314,8 @@ def _call_claude_agent(message: str, history: list[dict]) -> str:
 
     try:
         for _ in range(_CHAT_MAX_TURNS):
-            response = client.messages.create(
+            response = create_message(
+                client,
                 model=_CHAT_MODEL,
                 max_tokens=_CHAT_MAX_TOKENS,
                 system=_CHAT_SYSTEM,
