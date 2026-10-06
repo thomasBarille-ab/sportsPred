@@ -6,14 +6,17 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import joblib
 import numpy as np
 import structlog
 
 from ..db import session
-from ..features.builder import build_features_france_nt, build_features_ligue1, build_features_nba
+from ..features.builder import (
+    build_features_france_nt,
+    build_features_ligue1,
+    build_features_nba,
+)
 from ..features.elo import build_elo_state, compute_elo_ratings
 from ..llm_client import create_message
 
@@ -31,10 +34,10 @@ def _generate_explanation(
     away: str,
     predicted_outcome: str,
     p_home: float,
-    p_draw: Optional[float],
+    p_draw: float | None,
     p_away: float,
     snapshot: dict,
-) -> Optional[str]:
+) -> str | None:
     """Génère une phrase d'explication via Claude Haiku. Retourne None en cas d'erreur."""
     if not api_key:
         return None
@@ -47,7 +50,7 @@ def _generate_explanation(
     label = outcome_label.get(predicted_outcome, predicted_outcome)
 
     if sport == "ligue1":
-        elo_diff = int(round(snapshot.get("elo_diff", 0)))
+        elo_diff = round(snapshot.get("elo_diff", 0))
         dc_home = snapshot.get("dc_p_home", 0)
         dc_draw = snapshot.get("dc_p_draw", 0)
         dc_away = snapshot.get("dc_p_away", 0)
@@ -64,7 +67,7 @@ def _generate_explanation(
             f"Proba : dom {p_home:.0%} / nul {p_draw:.0%} / ext {p_away:.0%}."
         )
     else:
-        elo_diff = int(round(snapshot.get("elo_diff", 0)))
+        elo_diff = round(snapshot.get("elo_diff", 0))
         h_wr = snapshot.get("home_win_rate_last10", 0)
         a_wr = snapshot.get("away_win_rate_last10", 0)
         home_b2b = bool(snapshot.get("home_b2b", 0))
@@ -351,7 +354,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
 
             # ── Log de raisonnement ────────────────────────────────────────────
             if sport == "france_nt":
-                elo_diff = int(round(snapshot.get("elo_diff", 0)))
+                elo_diff = round(snapshot.get("elo_diff", 0))
                 elo_sign = f"+{elo_diff}" if elo_diff >= 0 else str(elo_diff)
                 comp_type_map = {0.0: "amical", 1.0: "Nations League", 2.0: "qualif", 3.0: "tournoi"}
                 comp_label = comp_type_map.get(snapshot.get("competition_type", 0.0), "?")
@@ -370,7 +373,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     p_away=f"{p_away:.1%}",
                 )
             elif sport == "ligue1":
-                elo_diff = int(round(snapshot.get("elo_diff", 0)))
+                elo_diff = round(snapshot.get("elo_diff", 0))
                 elo_sign = f"+{elo_diff}" if elo_diff >= 0 else str(elo_diff)
                 dc_str = (
                     f"{snapshot.get('dc_p_home', 0):.0%} / "
@@ -397,7 +400,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                     p_away=f"{p_away:.1%}",
                 )
             else:
-                elo_diff = int(round(snapshot.get("elo_diff", 0)))
+                elo_diff = round(snapshot.get("elo_diff", 0))
                 elo_sign = f"+{elo_diff}" if elo_diff >= 0 else str(elo_diff)
                 h_wr = snapshot.get("home_win_rate_last10", 0)
                 a_wr = snapshot.get("away_win_rate_last10", 0)

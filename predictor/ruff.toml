@@ -1,0 +1,10 @@
+[lint]
+ignore = [
+    "BLE001",  # broad exception catch: intentional resilience in scheduled jobs
+    "DTZ005",  # datetime.now() without tz
+    "DTZ007",  # strptime without %z
+    "DTZ011",  # date.today(): widespread, low risk
+    "SIM102",  # nested if: readability preference
+    "SIM117",  # nested with: psycopg2 cursor pattern
+    "RUF012",  # mutable class attribute: ClassVar annotation cosmetic
+]

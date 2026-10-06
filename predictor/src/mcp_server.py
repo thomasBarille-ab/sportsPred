@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 import os
-from decimal import Decimal
 from datetime import date, datetime
+from decimal import Decimal
 
 import psycopg2
 import psycopg2.extras

@@ -36,5 +36,5 @@ class capture_steps:
         _local.steps = []
         return _local.steps
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         _local.active = False

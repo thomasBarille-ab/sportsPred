@@ -24,16 +24,17 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .config import Settings
 from .db import session
-from .llm_client import get_metrics as get_llm_metrics, reset_metrics as reset_llm_metrics
 from .ingestion.balldontlie import BallDontLieProvider
 from .ingestion.football_data import FootballDataProvider
 from .ingestion.france_nt import FranceNTProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
-from .jobs.context_agent import run_context_agent
-from .jobs.odds_ingest import run_odds_ingest
-from .jobs.odds_backfill import run_odds_backfill
 from .jobs.bet_simulation import run_bet_simulation
+from .jobs.context_agent import run_context_agent
+from .jobs.odds_backfill import run_odds_backfill
+from .jobs.odds_ingest import run_odds_ingest
+from .llm_client import get_metrics as get_llm_metrics
+from .llm_client import reset_metrics as reset_llm_metrics
 from .log_capture import capture_steps
 from .summaries.ollama import generate_summary
 
@@ -197,8 +198,8 @@ def _job_summary(cfg: Settings) -> None:
         log.warning("summary.ollama_error_response", text=text[:120])
         return
 
-    from datetime import date
     import json
+    from datetime import date
     session.execute(
         """
         INSERT INTO daily_summaries (summary_date, content, metrics_snapshot)
@@ -265,8 +266,6 @@ def _check_drift_and_retrain(cfg: Settings) -> None:
                 reason="Agent recommande variant_to_test=no_odds, aucun challenger récent",
             )
             try:
-                from .training.trainer import train_model
-                from .training.champion_challenger import register_model_version
                 from .jobs.retrain import _run_no_odds_variant
                 for sport in ("ligue1", "nba", "france_nt"):
                     _run_no_odds_variant(sport, cfg.model_storage_path)

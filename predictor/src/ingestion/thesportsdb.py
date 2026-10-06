@@ -11,7 +11,6 @@ TheSportsDB IDs :
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Optional
 
 import httpx
 import structlog
@@ -63,7 +62,7 @@ def _parse_dt(date_str: str, time_str: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def _event_to_dto(e: dict, status: str) -> Optional[FixtureDTO]:
+def _event_to_dto(e: dict, status: str) -> FixtureDTO | None:
     try:
         home = e["strHomeTeam"]
         away = e["strAwayTeam"]
@@ -79,8 +78,8 @@ def _event_to_dto(e: dict, status: str) -> Optional[FixtureDTO]:
         competition = _map_competition(comp_name)
         match_dt = _parse_dt(e.get("dateEvent", ""), e.get("strTime", ""))
 
-        home_score: Optional[int] = None
-        away_score: Optional[int] = None
+        home_score: int | None = None
+        away_score: int | None = None
         if status == "FINISHED":
             hs = e.get("intHomeScore")
             as_ = e.get("intAwayScore")

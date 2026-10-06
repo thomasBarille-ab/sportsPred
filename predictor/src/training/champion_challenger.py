@@ -11,8 +11,8 @@ est automatiquement promu.
 
 from __future__ import annotations
 
-import structlog
 import numpy as np
+import structlog
 
 from ..db import session
 

@@ -10,7 +10,6 @@ import structlog
 from ..db import session
 from ..training.champion_challenger import (
     IMPROVEMENT_THRESHOLD,
-    MIN_HOLDOUT_SAMPLES,
     get_production_model,
     maybe_promote,
     register_model_version,
@@ -39,8 +38,8 @@ def _score_champion_on_holdout(
     Retourne None si le champion est legacy (pas de pipeline_version >= 2)
     ou si les feature_names diffèrent.
     """
-    import json
     import joblib
+
     from ..training.trainer import _compute_metrics
 
     try:

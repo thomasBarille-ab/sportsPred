@@ -44,9 +44,6 @@ France NT features (34) :
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
-
-import numpy as np
 
 from .dixon_coles import DCModel
 from .elo import EloState
@@ -241,10 +238,10 @@ def build_features_ligue1(
     elo_state: EloState,
     dc_model: DCModel,
     schedule: list[dict] | None = None,
-    odds_home: Optional[float] = None,
-    odds_draw: Optional[float] = None,
-    odds_away: Optional[float] = None,
-    context: Optional[dict] = None,
+    odds_home: float | None = None,
+    odds_draw: float | None = None,
+    odds_away: float | None = None,
+    context: dict | None = None,
 ) -> tuple[list[float], list[str]]:
     """Retourne (feature_vector, feature_names).
 
@@ -305,8 +302,8 @@ def build_features_nba(
     all_matches: list[dict],
     elo_state: EloState,
     schedule: list[dict] | None = None,
-    odds_home: Optional[float] = None,
-    odds_away: Optional[float] = None,
+    odds_home: float | None = None,
+    odds_away: float | None = None,
 ) -> tuple[list[float], list[str]]:
     """Retourne (feature_vector, feature_names).
 
@@ -341,13 +338,13 @@ def build_features_france_nt(
     competition: str,
     all_matches: list[dict],
     elo_state: EloState,
-    dc_model: Optional[DCModel] = None,
+    dc_model: DCModel | None = None,
     n_starters_absent: int = 0,
     starters_available_ratio: float = 1.0,
-    odds_home: Optional[float] = None,
-    odds_draw: Optional[float] = None,
-    odds_away: Optional[float] = None,
-    context: Optional[dict] = None,
+    odds_home: float | None = None,
+    odds_draw: float | None = None,
+    odds_away: float | None = None,
+    context: dict | None = None,
 ) -> tuple[list[float], list[str]]:
     """Features pour l'Équipe de France NT (34 features, 3 classes).
 

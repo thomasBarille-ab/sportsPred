@@ -53,7 +53,6 @@ def search_team_context(
         return _neutral(team_name)
 
     date_str = match_date.strftime("%d/%m/%Y")
-    sport_label = "football" if sport in ("ligue1", "france_nt") else sport
 
     prompt = (
         f"Recherche les informations de disponibilité pour l'équipe '{team_name}' "

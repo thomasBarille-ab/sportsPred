@@ -16,7 +16,11 @@ from typing import Any
 import structlog
 
 from ..db import session
-from ..db.queries import q_recent_predictions, q_failure_patterns, q_model_performance_trend
+from ..db.queries import (
+    q_failure_patterns,
+    q_model_performance_trend,
+    q_recent_predictions,
+)
 from ..llm_client import create_message
 
 log = structlog.get_logger()

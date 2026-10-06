@@ -4,8 +4,7 @@ et des 14 prochains jours, les upserte en base.
 
 from __future__ import annotations
 
-import json
-from datetime import date, timedelta, timezone
+from datetime import date, timedelta
 
 import structlog
 
@@ -199,8 +198,8 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
 
 def run_france_nt_ingest_and_lineups(provider, sport: str = "france_nt") -> dict:
     """Ingestion France NT + mise à jour des compositions des matchs récents terminés."""
-    from .france_nt_backfill import _upsert_lineup
     from ..ingestion.france_nt import FranceNTProvider
+    from .france_nt_backfill import _upsert_lineup
 
     result = run_ingest(provider, sport)
 

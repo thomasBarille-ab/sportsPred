@@ -16,12 +16,11 @@ from __future__ import annotations
 
 import time
 from datetime import date, datetime, timezone
-from typing import Optional
 
 import httpx
 import structlog
 
-from .api_football import ApiFootballClient, FRANCE_TEAM_ID
+from .api_football import ApiFootballClient
 from .base import DataProvider, FixtureDTO, ResultDTO
 from .thesportsdb import TheSportsDBClient
 
@@ -42,7 +41,7 @@ def _parse_date(s: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def _to_fixture_dto(match: dict) -> Optional[FixtureDTO]:
+def _to_fixture_dto(match: dict) -> FixtureDTO | None:
     try:
         fx = match["fixture"]
         league = match["league"]
@@ -63,8 +62,8 @@ def _to_fixture_dto(match: dict) -> Optional[FixtureDTO]:
         else:
             status = "SCHEDULED"
 
-        home_score: Optional[int] = None
-        away_score: Optional[int] = None
+        home_score: int | None = None
+        away_score: int | None = None
         if status == "FINISHED":
             gs_h = goals.get("home")
             gs_a = goals.get("away")
@@ -94,7 +93,7 @@ def _to_fixture_dto(match: dict) -> Optional[FixtureDTO]:
         return None
 
 
-def extract_apf_id(external_id: str) -> Optional[int]:
+def extract_apf_id(external_id: str) -> int | None:
     """Extrait l'ID numérique API-Football depuis 'apf_12345'."""
     try:
         return int(external_id.replace("apf_", ""))
@@ -153,7 +152,7 @@ class FranceNTFDOProvider:
             or m.get("awayTeam", {}).get("name") == "France"
         )
 
-    def _to_dto(self, m: dict, comp_code: str) -> Optional[FixtureDTO]:
+    def _to_dto(self, m: dict, comp_code: str) -> FixtureDTO | None:
         try:
             score = m.get("score", {}).get("fullTime", {})
             hs = score.get("home")
@@ -288,7 +287,7 @@ class FranceNTESPNProvider:
                 return h_name, a_name
         return None
 
-    def _event_to_fixture_dto(self, event: dict, comp_code: str) -> Optional[FixtureDTO]:
+    def _event_to_fixture_dto(self, event: dict, comp_code: str) -> FixtureDTO | None:
         try:
             names = self._france_names(event)
             if not names:
@@ -301,8 +300,8 @@ class FranceNTESPNProvider:
 
             completed = comp.get("status", {}).get("type", {}).get("completed", False)
             status = "FINISHED" if completed else "SCHEDULED"
-            home_score: Optional[int] = None
-            away_score: Optional[int] = None
+            home_score: int | None = None
+            away_score: int | None = None
             if completed:
                 hs = home.get("score")
                 as_ = away.get("score")

@@ -18,9 +18,10 @@ import asyncio
 import hmac
 import json
 import threading
+from collections.abc import AsyncIterator
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import structlog
 import uvicorn
@@ -29,11 +30,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .db import session
-from .db.queries import q_recent_predictions, q_failure_patterns, q_upcoming_fixtures
+from .db.queries import q_failure_patterns, q_recent_predictions, q_upcoming_fixtures
 from .llm_client import create_message
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.blocking import BlockingScheduler
+
     from .config import Settings
 
 log = structlog.get_logger()
@@ -42,7 +44,7 @@ app = FastAPI(title="Sports Predictor", version="1.0", docs_url="/docs")
 
 _ANTHROPIC_API_KEY: str = ""
 _INTERNAL_TOKEN:    str = ""
-_scheduler: "BlockingScheduler | None" = None
+_scheduler: BlockingScheduler | None = None
 
 _EXPLICIT_COMMANDS = {"/ingest", "/predict", "/evaluate", "/retrain", "/summary", "/context"}
 
@@ -437,8 +439,8 @@ async def chat(body: ChatRequest, request: Request) -> Any:
 # ── Launcher ──────────────────────────────────────────────────────────────────
 
 def start_trigger_server(
-    scheduler: "BlockingScheduler",
-    cfg: "Settings",
+    scheduler: BlockingScheduler,
+    cfg: Settings,
     port: int = 8080,
 ) -> None:
     global _ANTHROPIC_API_KEY, _INTERNAL_TOKEN, _scheduler

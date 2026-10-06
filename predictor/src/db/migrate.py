@@ -7,7 +7,6 @@ après chaque application réussie — les fichiers déjà joués sont ignorés.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import structlog

@@ -6,7 +6,7 @@ et archive pour les dates passées.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
 import httpx
 import structlog

@@ -11,11 +11,10 @@ tout data leakage.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
 
-def _outcome(home_id: str, m: dict) -> Optional[float]:
+def _outcome(home_id: str, m: dict) -> float | None:
     """1 = win, 0 = loss, None = not finished."""
     if m.get("home_score") is None:
         return None

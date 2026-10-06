@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Optional
 
 
 @dataclass
@@ -16,9 +15,9 @@ class FixtureDTO:
     season: str
     competition: str
     status: str = "scheduled"
-    home_score: Optional[int] = None
-    away_score: Optional[int] = None
-    round: Optional[int] = None
+    home_score: int | None = None
+    away_score: int | None = None
+    round: int | None = None
 
 
 @dataclass
@@ -29,9 +28,9 @@ class ResultDTO:
     away_score: int
     status: str         # 'FINISHED' | 'FINAL' etc.
     # Optional: used as fallback when external_id doesn't match (provider swap apf_ ↔ tsdb_)
-    home_team_name: Optional[str] = None
-    away_team_name: Optional[str] = None
-    match_date: Optional[datetime] = None
+    home_team_name: str | None = None
+    away_team_name: str | None = None
+    match_date: datetime | None = None
 
 
 class DataProvider(ABC):

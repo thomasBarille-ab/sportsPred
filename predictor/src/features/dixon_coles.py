@@ -15,14 +15,12 @@ Contrainte d'identifiabilité : attack[première équipe] = 1 (log_attack[0] = 0
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import gammaln
 from scipy.stats import poisson
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Correction Dixon-Coles

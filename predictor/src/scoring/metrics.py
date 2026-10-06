@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-
 Outcome = Literal["home", "draw", "away"]
 
 # Baseline Brier pour un modèle uniforme (référence pour l'évaluation)

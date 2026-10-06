@@ -1,5 +1,6 @@
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 import psycopg2
 import psycopg2.extras
@@ -28,16 +29,14 @@ def get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
 
 
 def execute(sql: str, params: Any = None) -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
 
 
 def execute_returning(sql: str, params: Any = None) -> Any:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()[0]
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return cur.fetchone()[0]
 
 
 def fetch_one(sql: str, params: Any = None) -> dict | None:

@@ -58,6 +58,7 @@ def run_rescore() -> dict:
 
 if __name__ == "__main__":
     import sys
+
     from ..config import load_settings
     from ..db import session as db
 

@@ -37,6 +37,7 @@ def _configure_logging(level: str) -> None:
 def _bootstrap_france_nt(cfg: Settings) -> None:
     """Bootstrap France NT : charge l'historique depuis 2018 si la table est vide."""
     import datetime
+
     from .ingestion.france_nt import FranceNTProvider
     from .jobs.france_nt_backfill import run_france_nt_backfill
 
@@ -66,6 +67,7 @@ def _bootstrap_france_nt(cfg: Settings) -> None:
 def _bootstrap_if_empty(cfg: Settings) -> None:
     """Si aucune fixture n'existe en DB, charge 2 saisons d'historique."""
     import httpx
+
     from .ingestion.balldontlie import BallDontLieProvider
     from .ingestion.football_data import FootballDataProvider
     from .jobs.ingest import run_historical_ingest
@@ -115,7 +117,9 @@ def _bootstrap_if_empty(cfg: Settings) -> None:
 def _backfill_rounds_if_needed(cfg: Settings) -> None:
     """Remplit la colonne round pour les fixtures ligue1 qui en sont dépourvues."""
     import datetime
+
     import httpx
+
     from .ingestion.football_data import FootballDataProvider
     from .jobs.ingest import run_historical_ingest
 

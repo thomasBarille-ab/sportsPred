@@ -71,6 +71,7 @@ def run_repair_results() -> dict:
 
 if __name__ == "__main__":
     import sys
+
     from ..config import load_settings
     from ..db import session as db
 
