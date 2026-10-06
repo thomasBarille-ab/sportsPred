@@ -41,7 +41,7 @@ jobs:
         run: pip install -r predictor/requirements.txt -r predictor/requirements-dev.txt
 
       - name: Run tests
-        run: cd predictor && python -m pytest tests/ -v --tb=short
+        run: python -m pytest predictor/tests/ -v --tb=short
 
   lint:
     name: Lint & type check

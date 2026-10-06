@@ -91,6 +91,11 @@ class BallDontLieProvider(DataProvider):
         is_final = g.get("status") == "Final"
         status = "FINISHED" if is_final else "SCHEDULED"
 
+        season_year = int(g.get("season", _season_from_date(dt)))
+        # Regular season starts ~Oct 22 each year; October games before that are preseason
+        is_preseason = (dt.month == 10 and dt.day < 22 and dt.year == season_year)
+        competition = "NBA Preseason" if is_preseason else "NBA"
+
         return FixtureDTO(
             external_id=str(g["id"]),
             sport=_SPORT,
@@ -99,8 +104,8 @@ class BallDontLieProvider(DataProvider):
             away_team_id=str(away.get("id", "")),
             away_team_name=away.get("full_name", away.get("name", "")),
             match_date=dt,
-            season=str(g.get("season", _season_from_date(dt))),
-            competition="NBA",
+            season=str(season_year),
+            competition=competition,
             status=status,
             home_score=int(raw_home_score) if is_final and raw_home_score is not None else None,
             away_score=int(raw_away_score) if is_final and raw_away_score is not None else None,
@@ -132,8 +137,7 @@ class BallDontLieProvider(DataProvider):
 
     def fetch_upcoming_fixtures(self, from_date: date, to_date: date) -> list[FixtureDTO]:
         games = self._date_range_games(from_date, to_date)
-        parsed = [self._parse_game(g) for g in games]
-        return [fx for fx in parsed if fx.status == "SCHEDULED"]
+        return [self._parse_game(g) for g in games]
 
     def fetch_recent_results(self, from_date: date, to_date: date) -> list[ResultDTO]:
         games = self._date_range_games(from_date, to_date)

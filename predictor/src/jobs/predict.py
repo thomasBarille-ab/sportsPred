@@ -182,8 +182,11 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
     # Charge tous les matchs UNE seule fois
     all_matches = _get_all_matches_for_sport(sport)
 
-    # Recalcule l'Elo depuis TOUS les matchs terminés (ne réutilise plus artifact["elo"])
-    finished_matches = [m for m in all_matches if m.get("home_score") is not None]
+    # Recalcule l'Elo depuis les matchs terminés hors pré-saison (évite de polluer les stats)
+    finished_matches = [
+        m for m in all_matches
+        if m.get("home_score") is not None and m.get("competition") != "NBA Preseason"
+    ]
     ratings = compute_elo_ratings(finished_matches, sport)
     elo_state = build_elo_state(sport)
     elo_state.ratings = ratings
@@ -265,8 +268,10 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
                 }
 
     n_predicted = 0
-    # Utilise uniquement les matchs terminés comme historique pour les features
-    finished_list = [m for m in all_matches if m.get("home_score") is not None]
+    finished_list = [
+        m for m in all_matches
+        if m.get("home_score") is not None and m.get("competition") != "NBA Preseason"
+    ]
 
     for fixture in unpredicted:
         try:
