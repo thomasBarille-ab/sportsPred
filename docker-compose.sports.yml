@@ -60,6 +60,7 @@ services:
       - predictor_models:/models
     networks:
       - sports-net
+      - mediastack_sports-internal
     expose:
       - "8080"
 
