@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import structlog
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -197,17 +197,34 @@ def _job_summary(cfg: Settings) -> None:
         log.warning("summary.claude_error_response", text=text[:120])
         return
 
-    import json
-    from datetime import date
+    today = date.today()
     session.execute(
         """
         INSERT INTO daily_summaries (summary_date, content, metrics_snapshot)
         VALUES (%s,%s,%s)
         ON CONFLICT (summary_date) DO UPDATE SET content = EXCLUDED.content, metrics_snapshot = EXCLUDED.metrics_snapshot
         """,
-        (date.today(), text, json.dumps(metrics)),
+        (today, text, json.dumps(metrics)),
     )
-    log.info("summary.saved", date=str(date.today()))
+    log.info("summary.saved", date=str(today))
+
+    _send_discord_summary(cfg.discord_webhook_url, text, today)
+
+
+def _send_discord_summary(webhook_url: str, text: str, summary_date: date) -> None:
+    """Publie le résumé quotidien sur Discord. Silencieux si webhook_url vide."""
+    if not webhook_url:
+        return
+    import httpx
+    content = f"**Résumé du {summary_date.strftime('%d/%m/%Y')}**\n\n{text}"
+    # Discord limite à 2000 chars par message
+    if len(content) > 1950:
+        content = content[:1950] + "…"
+    try:
+        httpx.post(webhook_url, json={"content": content}, timeout=5)
+        log.info("summary.discord_sent", chars=len(content))
+    except Exception as exc:
+        log.warning("summary.discord_error", error=str(exc))
 
 
 def _job_retrain(cfg: Settings) -> None:
