@@ -197,15 +197,61 @@ def run_ingest(provider: DataProvider, sport: str) -> dict:
 
 
 def run_france_nt_ingest_and_lineups(provider, sport: str = "france_nt") -> dict:
-    """Ingestion France NT + mise à jour des compositions des matchs récents terminés."""
+    """Ingestion France NT + rattrapage scores TSDB + lineups."""
     from ..ingestion.france_nt import FranceNTProvider
+    from ..scoring.metrics import outcome_from_scores
     from .france_nt_backfill import _upsert_lineup
 
     result = run_ingest(provider, sport)
 
-    # Complète les lineups pour les matchs terminés récents sans composition
     if not isinstance(provider, FranceNTProvider):
         return result
+
+    # Rattrapage : matchs SCHEDULED dont la date est passée → lookup TSDB par ID
+    stale = session.fetch_all(
+        """
+        SELECT id, external_id, home_team_name, away_team_name
+        FROM fixtures
+        WHERE sport = 'france_nt'
+          AND status = 'SCHEDULED'
+          AND match_date < NOW() - INTERVAL '2 hours'
+          AND external_id LIKE 'tsdb_%'
+        ORDER BY match_date DESC
+        LIMIT 10
+        """,
+    )
+    n_backfilled = 0
+    for row in stale:
+        event_id = row["external_id"].removeprefix("tsdb_")
+        dto = provider._tsdb.lookup_event(event_id)
+        if dto is None or dto.status != "FINISHED" or dto.home_score is None:
+            continue
+        session.execute(
+            """
+            UPDATE fixtures
+            SET status = 'FINISHED', home_score = %s, away_score = %s, updated_at = NOW()
+            WHERE id = %s
+            """,
+            (dto.home_score, dto.away_score, row["id"]),
+        )
+        outcome = outcome_from_scores(dto.home_score, dto.away_score, sport)
+        session.execute(
+            """
+            INSERT INTO results (fixture_id, home_score, away_score, actual_outcome)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (fixture_id) DO NOTHING
+            """,
+            (row["id"], dto.home_score, dto.away_score, outcome),
+        )
+        n_backfilled += 1
+        log.info(
+            "ingest.france_nt_tsdb_backfill",
+            match=f"{row['home_team_name']} vs {row['away_team_name']}",
+            score=f"{dto.home_score}-{dto.away_score}",
+        )
+    if n_backfilled:
+        log.info("ingest.france_nt_tsdb_results_backfilled", n=n_backfilled)
+    result["tsdb_results_backfilled"] = n_backfilled
 
     missing = session.fetch_all(
         """

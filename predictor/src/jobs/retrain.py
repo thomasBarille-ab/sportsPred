@@ -226,8 +226,17 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
                 seuil=IMPROVEMENT_THRESHOLD,
             )
         else:
-            log.info("retrain.champion_legacy", sport=sport,
-                     note="Champion non comparable — promotion automatique du challenger")
+            log.warning(
+                "retrain.champion_incomparable",
+                sport=sport,
+                champion_id=champion["id"],
+                note="Champion inchargeable/legacy — démotion forcée pour permettre la promotion du challenger",
+            )
+            session.execute(
+                "UPDATE model_versions SET is_production = FALSE WHERE id = %s",
+                (champion["id"],),
+            )
+            champion = None
     else:
         log.info("retrain.premier_modèle", sport=sport,
                  note="Aucun champion existant — promotion automatique")

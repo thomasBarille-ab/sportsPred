@@ -161,6 +161,26 @@ class TheSportsDBClient:
 
         return []
 
+    def lookup_event(self, event_id: str) -> FixtureDTO | None:
+        """Récupère un événement par son ID TheSportsDB (lookupevent.php).
+
+        Utilisé pour rafraîchir le score d'un match SCHEDULED dont la date est passée.
+        """
+        try:
+            resp = httpx.get(f"{_BASE}/lookupevent.php", params={"id": event_id}, timeout=_TIMEOUT)
+            resp.raise_for_status()
+            events = resp.json().get("events") or []
+            if not events:
+                return None
+            e = events[0]
+            hs = e.get("intHomeScore")
+            as_ = e.get("intAwayScore")
+            status = "FINISHED" if (hs is not None and as_ is not None) else "SCHEDULED"
+            return _event_to_dto(e, status)
+        except Exception as exc:
+            log.warning("thesportsdb.lookup_failed", event_id=event_id, error=str(exc))
+            return None
+
     def get_season_fixtures(self, league_id: int, season: str) -> list[FixtureDTO]:
         """Retourne tous les matchs d'une saison pour une ligue donnée, filtrés pour la France."""
         try:
