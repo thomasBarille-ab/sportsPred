@@ -3,6 +3,8 @@ import { BankrollChart } from "@/components/BankrollChart";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 
+export const dynamic = "force-dynamic";
+
 const OUTCOME_LABEL: Record<string, string> = {
   home: "Domicile",
   draw: "Nul",
