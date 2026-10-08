@@ -36,7 +36,7 @@ from .jobs.odds_ingest import run_odds_ingest
 from .llm_client import get_metrics as get_llm_metrics
 from .llm_client import reset_metrics as reset_llm_metrics
 from .log_capture import capture_steps
-from .summaries.ollama import generate_summary
+from .summaries.claude import generate_summary as generate_summary_claude
 
 log = structlog.get_logger()
 
@@ -188,14 +188,13 @@ def _job_agent_analysis(cfg: Settings) -> None:
 def _job_summary(cfg: Settings) -> None:
     metrics = _build_metrics_snapshot()
     try:
-        text = generate_summary(cfg.ollama_url, cfg.ollama_model, metrics)
+        text = generate_summary_claude(cfg.anthropic_api_key, metrics)
     except Exception as exc:
         log.error("summary.generate_failed", error=str(exc))
         return
 
-    # Ne sauvegarde pas si Ollama a retourné un message d'erreur
     if text.startswith("["):
-        log.warning("summary.ollama_error_response", text=text[:120])
+        log.warning("summary.claude_error_response", text=text[:120])
         return
 
     import json
