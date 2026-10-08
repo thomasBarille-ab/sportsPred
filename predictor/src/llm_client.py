@@ -10,6 +10,7 @@ Usage :
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 import structlog
 
 log = structlog.get_logger()
+
+_WORKSPACE_ID = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
 
 # Tarification (USD / 1M tokens) — à mettre à jour si Anthropic change ses prix
 _PRICING: dict[str, tuple[float, float]] = {
@@ -67,6 +70,9 @@ def create_message(client: Any, **kwargs: Any) -> Any:
     Tous les kwargs sont passés directement à client.messages.create().
     """
     model = kwargs.get("model", "unknown")
+    if _WORKSPACE_ID:
+        extra = kwargs.setdefault("extra_headers", {})
+        extra.setdefault("anthropic-workspace-id", _WORKSPACE_ID)
     t0 = time.monotonic()
     response = client.messages.create(**kwargs)
     latency_ms = int((time.monotonic() - t0) * 1000)
