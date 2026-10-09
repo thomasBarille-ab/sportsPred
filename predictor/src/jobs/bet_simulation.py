@@ -28,26 +28,25 @@ def _best_ev(
     odds_draw: float | None,
     odds_away: float | None,
 ) -> tuple[str, float, float] | None:
-    """Retourne (bet_outcome, odds_taken, ev_pct) pour le meilleur EV, ou None."""
-    candidates = []
+    """Retourne (bet_outcome, odds_taken, ev_pct) si l'outcome prédit par le modèle a un EV > seuil.
 
-    if odds_home and odds_home > 1:
-        ev = p_home * odds_home - 1
-        candidates.append(("home", odds_home, ev))
+    Le pari ne peut JAMAIS aller contre la prédiction du modèle : on calcule l'EV
+    uniquement sur l'outcome le plus probable selon les probas prédites.
+    """
+    outcomes = [("home", p_home, odds_home)]
+    if sport in ("ligue1", "france_nt") and p_draw is not None:
+        outcomes.append(("draw", p_draw, odds_draw))
+    outcomes.append(("away", p_away, odds_away))
 
-    if sport in ("ligue1", "france_nt") and odds_draw and odds_draw > 1 and p_draw is not None:
-        ev = p_draw * odds_draw - 1
-        candidates.append(("draw", odds_draw, ev))
-
-    if odds_away and odds_away > 1:
-        ev = p_away * odds_away - 1
-        candidates.append(("away", odds_away, ev))
-
-    if not candidates:
+    predicted = max(outcomes, key=lambda x: x[1])
+    outcome, prob, odds = predicted
+    if not odds or odds <= 1:
         return None
 
-    best = max(candidates, key=lambda x: x[2])
-    return best if best[2] > _MIN_EV_PCT else None
+    ev = prob * odds - 1
+    if ev <= _MIN_EV_PCT:
+        return None
+    return outcome, odds, ev
 
 
 def _fetch_candidates() -> list[dict]:
