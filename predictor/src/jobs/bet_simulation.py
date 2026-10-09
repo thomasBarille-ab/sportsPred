@@ -28,10 +28,10 @@ def _best_ev(
     odds_draw: float | None,
     odds_away: float | None,
 ) -> tuple[str, float, float] | None:
-    """Retourne (bet_outcome, odds_taken, ev_pct) si l'outcome prédit par le modèle a un EV > seuil.
+    """Retourne (bet_outcome, odds_taken, ev_pct) pour l'outcome prédit par le modèle.
 
-    Le pari ne peut JAMAIS aller contre la prédiction du modèle : on calcule l'EV
-    uniquement sur l'outcome le plus probable selon les probas prédites.
+    Le pari suit toujours la prédiction (outcome le plus probable).
+    Retourne None uniquement si aucune cote n'est disponible pour cet outcome.
     """
     outcomes = [("home", p_home, odds_home)]
     if sport in ("ligue1", "france_nt") and p_draw is not None:
@@ -44,8 +44,6 @@ def _best_ev(
         return None
 
     ev = prob * odds - 1
-    if ev <= _MIN_EV_PCT:
-        return None
     return outcome, odds, ev
 
 
