@@ -54,6 +54,8 @@ def _fetch_candidates() -> list[dict]:
                p.id              AS prediction_id,
                p.fixture_id,
                f.sport,
+               f.home_team_name,
+               f.away_team_name,
                p.prob_home_win,
                p.prob_draw,
                p.prob_away_win,
@@ -78,13 +80,12 @@ def _fetch_candidates() -> list[dict]:
 def _send_discord_alert(webhook_url: str, row: dict, bet_outcome: str, odds: float, ev_pct: float) -> None:
     """Envoie une alerte Discord pour un value bet significatif."""
     import httpx
-    _SPORT_LABELS = {"ligue1": "⚽ Ligue 1", "france_nt": "⚽ France NT", "nba": "🏀 NBA"}
-    sport_label = _SPORT_LABELS.get(row["sport"], row["sport"])
-    outcome_label = {"home": "Victoire domicile", "draw": "Match nul", "away": "Victoire extérieur"}.get(bet_outcome, bet_outcome)
+    home = row["home_team_name"]
+    away = row["away_team_name"]
+    pronos = {"home": home, "draw": "Match nul", "away": away}.get(bet_outcome, bet_outcome)
     content = (
-        f"**Value Bet détecté** — {sport_label}\n"
-        f"Fixture #{row['fixture_id']} · {outcome_label}\n"
-        f"Cote : **{odds:.2f}** · EV : **{ev_pct:+.1%}** · Bookmaker : {row['bookmaker']}"
+        f"**{home} — {away}**\n"
+        f"Prono : **{pronos}** · Cote : **{odds:.2f}**"
     )
     try:
         httpx.post(webhook_url, json={"content": content}, timeout=5)
