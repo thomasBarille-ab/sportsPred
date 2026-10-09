@@ -16,7 +16,6 @@ from ..db import session
 log = structlog.get_logger()
 
 _MIN_EV_PCT = 0.05  # seuil minimal pour créer une simulation (5 %)
-_DISCORD_EV_THRESHOLD = 0.08  # EV >= 8% → alerte Discord
 
 
 def _best_ev(
@@ -142,17 +141,17 @@ def _run(discord_webhook_url: str = "") -> dict:
             n_simulated += 1
             if ev_pct > 0:
                 n_value_bets += 1
-                log.info(
-                    "bet_simulation.value_bet",
-                    fixture_id=row["fixture_id"],
-                    sport=row["sport"],
-                    outcome=bet_outcome,
-                    odds=round(odds_taken, 2),
-                    ev_pct=f"{ev_pct:.1%}",
-                    bookmaker=row["bookmaker"],
-                )
-                if discord_webhook_url and ev_pct >= _DISCORD_EV_THRESHOLD:
-                    _send_discord_alert(discord_webhook_url, row, bet_outcome, odds_taken, ev_pct)
+            log.info(
+                "bet_simulation.simulated",
+                fixture_id=row["fixture_id"],
+                sport=row["sport"],
+                outcome=bet_outcome,
+                odds=round(odds_taken, 2),
+                ev_pct=f"{ev_pct:.1%}",
+                bookmaker=row["bookmaker"],
+            )
+            if discord_webhook_url:
+                _send_discord_alert(discord_webhook_url, row, bet_outcome, odds_taken, ev_pct)
         except Exception as exc:
             log.error("bet_simulation.insert_error",
                       fixture_id=row["fixture_id"], error=str(exc))
