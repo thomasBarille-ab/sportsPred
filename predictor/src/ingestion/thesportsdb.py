@@ -10,7 +10,7 @@ TheSportsDB IDs :
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 
 import httpx
 import structlog
@@ -57,9 +57,9 @@ def _parse_dt(date_str: str, time_str: str) -> datetime:
             dt = datetime.fromisoformat(f"{date_str}T{time_str}")
         else:
             dt = datetime.fromisoformat(f"{date_str}T15:00:00")
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     except ValueError:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 def _event_to_dto(e: dict, status: str) -> FixtureDTO | None:

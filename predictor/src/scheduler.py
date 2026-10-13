@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import traceback
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 
 import structlog
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -43,7 +43,7 @@ log = structlog.get_logger()
 
 def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
     """Wrapper qui log chaque job dans agent_logs et capture les étapes détaillées."""
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     log_id = session.execute_returning(
         """
         INSERT INTO agent_logs (job_name, sport, started_at, status)
@@ -55,7 +55,7 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
     with capture_steps() as steps:
         try:
             result = fn(*args, **kwargs)
-            finished = datetime.now(timezone.utc)
+            finished = datetime.now(UTC)
             duration = (finished - started).total_seconds()
             records = None
             if isinstance(result, dict):
@@ -84,7 +84,7 @@ def _log_job(job_name: str, sport: str | None, fn, *args, **kwargs) -> None:
             )
             log.info("job.success", job=job_name, sport=sport, duration=round(duration, 1))
         except Exception as exc:
-            finished = datetime.now(timezone.utc)
+            finished = datetime.now(UTC)
             duration = (finished - started).total_seconds()
             err = traceback.format_exc()
             llm = get_llm_metrics()

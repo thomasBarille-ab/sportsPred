@@ -15,7 +15,7 @@ external_id : 'apf_{id}' | 'fdo_{id}' | 'espn_{id}' | 'tsdb_{id}'
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 
 import httpx
 import structlog
@@ -35,10 +35,10 @@ _CANCELLED_STATUSES = {"CANC", "ABD", "SUSP", "PST", "WO", "AWD"}
 
 def _parse_date(s: str) -> datetime:
     try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
     except ValueError:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 def _to_fixture_dto(match: dict) -> FixtureDTO | None:

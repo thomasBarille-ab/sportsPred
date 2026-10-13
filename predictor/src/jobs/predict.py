@@ -5,7 +5,7 @@ qui n'en a pas encore une.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import joblib
 import numpy as np
@@ -199,7 +199,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
     # Calendrier complet (hors CANCELLED/POSTPONED) pour le calcul du repos
     schedule = [m for m in all_matches if m.get("status") not in ("CANCELLED", "POSTPONED")]
 
-    now     = datetime.now(timezone.utc)
+    now     = datetime.now(UTC)
     horizon = now + timedelta(hours=horizon_hours)
 
     unpredicted = session.fetch_all(
@@ -280,7 +280,7 @@ def run_predict(sport: str, horizon_hours: int = _DEFAULT_HORIZON_HOURS, anthrop
         try:
             match_date = fixture["match_date"]
             if match_date.tzinfo is None:
-                match_date = match_date.replace(tzinfo=timezone.utc)
+                match_date = match_date.replace(tzinfo=UTC)
 
             fixture_odds = odds_by_fixture.get(fixture["id"])
             odds_home = fixture_odds[0] if fixture_odds else None

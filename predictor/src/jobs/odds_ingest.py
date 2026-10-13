@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 import structlog
@@ -60,7 +60,7 @@ def _find_fixture_id(
             continue
         mt = f["match_date"]
         if mt.tzinfo is None:
-            mt = mt.replace(tzinfo=timezone.utc)
+            mt = mt.replace(tzinfo=UTC)
         if abs((mt - t).total_seconds()) > window_hours * 3600:
             continue
         score = _sim(row.home_team, f["home_team_name"]) + _sim(row.away_team, f["away_team_name"])
@@ -77,7 +77,7 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
         log.warning("odds_ingest.skipped", reason="ODDS_API_KEY non configurée")
         return {"upserted": 0, "unmatched": 0}
 
-    horizon = datetime.now(timezone.utc) + timedelta(days=7)
+    horizon = datetime.now(UTC) + timedelta(days=7)
     fixtures = session.fetch_all(
         """
         SELECT id, sport, home_team_name, away_team_name, match_date

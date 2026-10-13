@@ -15,7 +15,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from difflib import SequenceMatcher
 
 import httpx
@@ -102,7 +102,7 @@ def fetch_season_xg(start_year: int) -> list[XGRow]:
             home_team = m["h"]["title"]
             away_team = m["a"]["title"]
             dt_str = m["datetime"]  # "2024-08-17 21:00:00"
-            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
         except (KeyError, ValueError):
             continue
         rows.append(XGRow(home_team=home_team, away_team=away_team,
@@ -130,7 +130,7 @@ def match_xg_to_fixtures(
         for f in fixtures:
             mt = f["match_date"]
             if hasattr(mt, "tzinfo") and mt.tzinfo is None:
-                mt = mt.replace(tzinfo=timezone.utc)
+                mt = mt.replace(tzinfo=UTC)
             if abs((mt - row.match_datetime).total_seconds()) > window_hours * 3600:
                 continue
             score = _sim(row.home_team, f["home_team_name"]) + _sim(row.away_team, f["away_team_name"])

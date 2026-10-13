@@ -7,7 +7,7 @@ Produit les features contextuelles consommées par predict.py le lendemain.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import structlog
 
@@ -28,7 +28,7 @@ def run_context_agent(anthropic_api_key: str) -> dict:
 
     Upsert dans match_context — idempotent si re-lancé dans la même journée.
     """
-    now     = datetime.now(timezone.utc)
+    now     = datetime.now(UTC)
     horizon = now + timedelta(hours=_HORIZON_H)
 
     upcoming = session.fetch_all(
@@ -53,7 +53,7 @@ def run_context_agent(anthropic_api_key: str) -> dict:
         last_run = fixture.get("agent_run_at")
         if last_run is not None:
             if last_run.tzinfo is None:
-                last_run = last_run.replace(tzinfo=timezone.utc)
+                last_run = last_run.replace(tzinfo=UTC)
             age_h = (now - last_run).total_seconds() / 3600
             if age_h < (24 - _LOOKBACK_H):
                 n_skipped += 1
@@ -65,7 +65,7 @@ def run_context_agent(anthropic_api_key: str) -> dict:
         away_name    = fixture["away_team_name"]
         match_date   = fixture["match_date"]
         if match_date.tzinfo is None:
-            match_date = match_date.replace(tzinfo=timezone.utc)
+            match_date = match_date.replace(tzinfo=UTC)
 
         log.info(
             "context_agent.processing",

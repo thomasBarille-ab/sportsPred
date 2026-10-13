@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import joblib
 import numpy as np
@@ -459,7 +459,7 @@ def train_model(
 
     # ── Sauvegarde de l'artefact final ───────────────────────────────────────
     os.makedirs(os.path.join(model_storage_path, sport), exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     path = os.path.join(model_storage_path, sport, f"model_{ts}.joblib")
     joblib.dump(
         {

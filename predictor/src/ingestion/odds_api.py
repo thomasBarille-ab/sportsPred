@@ -74,7 +74,7 @@ class OddsAPIProvider:
 
         results: list[OddsRow] = []
         for event in resp.json():
-            commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            commence_time = datetime.fromisoformat(event["commence_time"])
             home_team = event["home_team"]
             away_team = event["away_team"]
 

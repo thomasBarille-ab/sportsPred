@@ -19,7 +19,7 @@ import hmac
 import json
 import threading
 from collections.abc import AsyncIterator
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -398,7 +398,7 @@ async def run_job(job_id: str = Path(...)) -> dict:
     job = _scheduler.get_job(job_id)
     if job is None:
         raise HTTPException(404, detail=f"job inconnu: {job_id}")
-    job.modify(next_run_time=datetime.now(timezone.utc))
+    job.modify(next_run_time=datetime.now(UTC))
     log.info("trigger.job_lancé", job=job_id)
     return {"status": "accepted", "job": job_id}
 
@@ -417,7 +417,7 @@ async def chat(body: ChatRequest, request: Request) -> Any:
         if _scheduler:
             job = _scheduler.get_job(job_id)
             if job:
-                job.modify(next_run_time=datetime.now(timezone.utc))
+                job.modify(next_run_time=datetime.now(UTC))
                 action = job_id
                 action_note = "job lancé en arrière-plan"
                 log.info("chat.command_triggered", action=job_id)

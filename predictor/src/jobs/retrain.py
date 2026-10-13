@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import numpy as np
 import structlog
@@ -241,7 +241,7 @@ def run_retrain(sport: str, model_storage_path: str) -> dict:
         log.info("retrain.premier_modèle", sport=sport,
                  note="Aucun champion existant — promotion automatique")
 
-    version = datetime.now(timezone.utc).strftime("v%Y%m%d_%H%M%S")
+    version = datetime.now(UTC).strftime("v%Y%m%d_%H%M%S")
     model_path = result.model_path
 
     if sport == "france_nt":
@@ -350,8 +350,8 @@ def _run_no_odds_variant(
         variant="no_odds",
     )
 
-    from datetime import datetime, timezone
-    version = datetime.now(timezone.utc).strftime("v%Y%m%d_%H%M%S") + "_no_odds"
+    from datetime import UTC, datetime, timezone
+    version = datetime.now(UTC).strftime("v%Y%m%d_%H%M%S") + "_no_odds"
     if sport == "france_nt":
         _hp = HYPERPARAMS_FRANCE_NT
     elif sport == "ligue1":
