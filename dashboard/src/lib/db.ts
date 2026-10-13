@@ -163,12 +163,12 @@ export async function getBettingKPIs() {
       COUNT(*) FILTER (WHERE status = 'pending')                 AS pending,
       ROUND(SUM(pnl_units)::numeric, 2)                          AS total_pnl,
       ROUND(
-        COUNT(*) FILTER (WHERE status = 'won')::float
-        / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)
-      ::numeric, 3)                                              AS win_rate,
+        (COUNT(*) FILTER (WHERE status = 'won')::numeric
+        / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)),
+      3)                                                         AS win_rate,
       ROUND(
-        SUM(pnl_units) / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)
-      ::numeric, 4)                                              AS avg_pnl_per_bet,
+        (SUM(pnl_units)::numeric / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)),
+      4)                                                         AS avg_pnl_per_bet,
       ROUND(AVG(ev_pct)::numeric, 4)                             AS avg_ev_pct
     FROM bet_simulations
   `;
