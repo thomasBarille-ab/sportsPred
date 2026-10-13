@@ -7,7 +7,7 @@ Doc : https://www.balldontlie.io/api/v1
 """
 
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from typing import Any
 
 import httpx
@@ -77,11 +77,11 @@ class BallDontLieProvider(DataProvider):
         # balldontlie renvoie "2024-12-25" (date uniquement) ou ISO
         try:
             if "T" in dt_str:
-                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(dt_str)
             else:
-                dt = datetime.fromisoformat(dt_str).replace(tzinfo=timezone.utc)
+                dt = datetime.fromisoformat(dt_str).replace(tzinfo=UTC)
         except (ValueError, TypeError):
-            dt = datetime.now(timezone.utc)
+            dt = datetime.now(UTC)
 
         home = g.get("home_team", {})
         away = g.get("visitor_team", {})

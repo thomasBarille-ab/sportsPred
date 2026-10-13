@@ -5,7 +5,7 @@ Doc : https://www.football-data.org/documentation/quickstart
 """
 
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from typing import Any
 
 import httpx
@@ -25,7 +25,7 @@ def _parse_date(s: str | None) -> datetime | None:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return datetime.fromisoformat(s)
     except ValueError:
         return None
 
@@ -75,7 +75,7 @@ class FootballDataProvider(DataProvider):
             home_team_name=m["homeTeam"]["name"],
             away_team_id=str(m["awayTeam"]["id"]),
             away_team_name=m["awayTeam"]["name"],
-            match_date=_parse_date(m.get("utcDate")) or datetime.now(timezone.utc),
+            match_date=_parse_date(m.get("utcDate")) or datetime.now(UTC),
             season=season_year,
             competition=_COMPETITION,
             status=status,
