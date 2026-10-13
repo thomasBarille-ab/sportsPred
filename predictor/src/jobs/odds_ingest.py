@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 
 import structlog

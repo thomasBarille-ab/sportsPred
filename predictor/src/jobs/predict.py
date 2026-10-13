@@ -5,7 +5,7 @@ qui n'en a pas encore une.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import joblib
 import numpy as np

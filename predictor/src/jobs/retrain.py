@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import structlog
@@ -350,7 +350,7 @@ def _run_no_odds_variant(
         variant="no_odds",
     )
 
-    from datetime import UTC, datetime, timezone
+    from datetime import UTC, datetime
     version = datetime.now(UTC).strftime("v%Y%m%d_%H%M%S") + "_no_odds"
     if sport == "france_nt":
         _hp = HYPERPARAMS_FRANCE_NT

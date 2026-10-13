@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 import joblib
 import numpy as np

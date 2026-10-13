@@ -7,7 +7,7 @@ Produit les features contextuelles consommées par predict.py le lendemain.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 

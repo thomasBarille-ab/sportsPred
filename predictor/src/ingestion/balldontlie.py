@@ -7,7 +7,7 @@ Doc : https://www.balldontlie.io/api/v1
 """
 
 import time
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx

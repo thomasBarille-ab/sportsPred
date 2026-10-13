@@ -19,7 +19,7 @@ import hmac
 import json
 import threading
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 

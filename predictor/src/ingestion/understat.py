@@ -15,7 +15,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 
 import httpx

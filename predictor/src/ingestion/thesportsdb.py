@@ -10,7 +10,7 @@ TheSportsDB IDs :
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import httpx
 import structlog

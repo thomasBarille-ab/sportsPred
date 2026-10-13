@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import traceback
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import structlog
 from apscheduler.schedulers.blocking import BlockingScheduler

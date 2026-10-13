@@ -15,7 +15,7 @@ external_id : 'apf_{id}' | 'fdo_{id}' | 'espn_{id}' | 'tsdb_{id}'
 from __future__ import annotations
 
 import time
-from datetime import UTC, date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import httpx
 import structlog
