@@ -157,19 +157,12 @@ export async function getMatchdaySummary(sport: string) {
 export async function getBettingKPIs() {
   const rows = await sql`
     SELECT
-      COUNT(*)                                                   AS total_bets,
-      COUNT(*) FILTER (WHERE status = 'won')                     AS won,
-      COUNT(*) FILTER (WHERE status = 'lost')                    AS lost,
-      COUNT(*) FILTER (WHERE status = 'pending')                 AS pending,
-      ROUND(SUM(pnl_units)::numeric, 2)                          AS total_pnl,
-      ROUND(
-        (COUNT(*) FILTER (WHERE status = 'won')::numeric
-        / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)),
-      3)                                                         AS win_rate,
-      ROUND(
-        (SUM(pnl_units)::numeric / NULLIF(COUNT(*) FILTER (WHERE status IN ('won','lost')), 0)),
-      4)                                                         AS avg_pnl_per_bet,
-      ROUND(AVG(ev_pct)::numeric, 4)                             AS avg_ev_pct
+      COUNT(*)                                                              AS total_bets,
+      COUNT(*) FILTER (WHERE status = 'won')                                AS won,
+      COUNT(*) FILTER (WHERE status = 'lost')                               AS lost,
+      COUNT(*) FILTER (WHERE status = 'pending')                            AS pending,
+      COALESCE(SUM(pnl_units) FILTER (WHERE status IN ('won','lost')), 0)::float8  AS total_pnl,
+      AVG(ev_pct)::float8                                                   AS avg_ev_pct
     FROM bet_simulations
   `;
   return rows[0] ?? null;

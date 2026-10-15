@@ -32,9 +32,14 @@ export default async function BettingPage() {
     cumulativePnl: Number(r.cumulativePnl),
   }));
 
+  const totalBets = Number(kpis?.totalBets ?? 0);
+  const won = Number(kpis?.won ?? 0);
+  const lost = Number(kpis?.lost ?? 0);
+  const pending = Number(kpis?.pending ?? 0);
+  const resolved = won + lost;
   const totalPnl = Number(kpis?.totalPnl ?? 0);
-  const winRate = Number(kpis?.winRate ?? 0);
-  const avgEv = Number(kpis?.avgEvPct ?? 0);
+  const winRate = resolved > 0 ? won / resolved : null;
+  const avgEv = kpis?.avgEvPct != null ? Number(kpis.avgEvPct) : null;
 
   return (
     <div className="p-8 space-y-8">
@@ -44,16 +49,16 @@ export default async function BettingPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-card border border-border rounded-xl p-5">
           <p className="text-xs text-muted mb-1">Paris simulés</p>
-          <p className="text-3xl font-bold text-white">{Number(kpis?.totalBets ?? 0)}</p>
+          <p className="text-3xl font-bold text-white">{totalBets}</p>
           <p className="text-xs text-muted mt-1">
-            {Number(kpis?.won ?? 0)}W / {Number(kpis?.lost ?? 0)}L / {Number(kpis?.pending ?? 0)} en cours
+            {won}W / {lost}L / {pending} en cours
           </p>
         </div>
 
         <div className="bg-card border border-border rounded-xl p-5">
           <p className="text-xs text-muted mb-1">Win rate</p>
-          <p className={`text-3xl font-bold ${winRate >= 0.5 ? "text-green-400" : "text-red-400"}`}>
-            {kpis?.won != null ? `${(winRate * 100).toFixed(1)}%` : "—"}
+          <p className={`text-3xl font-bold ${winRate != null && winRate >= 0.5 ? "text-green-400" : "text-red-400"}`}>
+            {winRate != null ? `${(winRate * 100).toFixed(1)}%` : "—"}
           </p>
           <p className="text-xs text-muted mt-1">sur paris réglés</p>
         </div>
@@ -68,8 +73,8 @@ export default async function BettingPage() {
 
         <div className="bg-card border border-border rounded-xl p-5">
           <p className="text-xs text-muted mb-1">EV moyen</p>
-          <p className={`text-3xl font-bold ${avgEv >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {kpis?.avgEvPct != null ? `${(avgEv * 100).toFixed(1)}%` : "—"}
+          <p className={`text-3xl font-bold ${avgEv != null && avgEv >= 0 ? "text-green-400" : "text-red-400"}`}>
+            {avgEv != null ? `${(avgEv * 100).toFixed(1)}%` : "—"}
           </p>
           <p className="text-xs text-muted mt-1">par pari simulé</p>
         </div>
