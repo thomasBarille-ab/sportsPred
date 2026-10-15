@@ -155,17 +155,45 @@ export async function getMatchdaySummary(sport: string) {
 }
 
 export async function getBettingKPIs() {
-  const rows = await sql`
-    SELECT
-      COUNT(*)                                                              AS total_bets,
-      COUNT(*) FILTER (WHERE status = 'won')                                AS won,
-      COUNT(*) FILTER (WHERE status = 'lost')                               AS lost,
-      COUNT(*) FILTER (WHERE status = 'pending')                            AS pending,
-      COALESCE(SUM(pnl_units) FILTER (WHERE status IN ('won','lost')), 0)::float8  AS total_pnl,
-      AVG(ev_pct)::float8                                                   AS avg_ev_pct
+  const rows = await sql<{ status: string; pnlUnits: number | null; evPct: number | null }[]>`
+    SELECT status, pnl_units, ev_pct
     FROM bet_simulations
   `;
-  return rows[0] ?? null;
+
+  let totalBets = 0;
+  let won = 0;
+  let lost = 0;
+  let pending = 0;
+  let totalPnl = 0;
+  let evSum = 0;
+  let evCount = 0;
+
+  for (const r of rows) {
+    totalBets += 1;
+    if (r.status === "won") won += 1;
+    else if (r.status === "lost") lost += 1;
+    else if (r.status === "pending") pending += 1;
+
+    if ((r.status === "won" || r.status === "lost") && r.pnlUnits != null) {
+      totalPnl += Number(r.pnlUnits);
+    }
+    if (r.evPct != null) {
+      evSum += Number(r.evPct);
+      evCount += 1;
+    }
+  }
+
+  const resolved = won + lost;
+
+  return {
+    totalBets,
+    won,
+    lost,
+    pending,
+    totalPnl,
+    winRate: resolved > 0 ? won / resolved : null,
+    avgEvPct: evCount > 0 ? evSum / evCount : null,
+  };
 }
 
 export async function getBankrollHistory() {
