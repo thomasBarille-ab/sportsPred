@@ -18,7 +18,10 @@ const SPORT_LABEL: Record<string, string> = {
 
 export default async function BettingPage() {
   const [kpis, history, upcoming, history_bets] = await Promise.all([
-    getBettingKPIs().catch(() => null),
+    getBettingKPIs().catch((e: unknown) => {
+      console.error("[BettingPage] getBettingKPIs failed:", e instanceof Error ? e.message : String(e));
+      return null;
+    }),
     getBankrollHistory().catch(() => []),
     getUpcomingValueBets().catch(() => []),
     getBetHistory(50).catch(() => []),
