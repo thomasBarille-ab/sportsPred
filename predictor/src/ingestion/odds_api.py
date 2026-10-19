@@ -125,6 +125,11 @@ class OddsAPIProvider:
                             sport, home_team, away_team, commence_time,
                             bm["key"], outcomes, market_results,
                         )
+                    elif key == "spreads":
+                        self._parse_spreads(
+                            sport, home_team, away_team, commence_time,
+                            bm["key"], outcomes, market_results,
+                        )
 
         return h2h_results, market_results
 
@@ -184,6 +189,33 @@ class OddsAPIProvider:
                 market="btts",
                 selection=name,
                 line=0.0,
+                odds=float(price),
+            ))
+
+    @staticmethod
+    def _parse_spreads(sport, home_team, away_team, commence_time, bookmaker, outcomes, out):
+        # Pour spreads, le "name" est le nom d'équipe (home ou away), "point" est le handicap
+        for o in outcomes:
+            name = o.get("name", "")
+            point = o.get("point")
+            price = o.get("price")
+            if point is None or price is None:
+                continue
+            if name == home_team:
+                selection = "home"
+            elif name == away_team:
+                selection = "away"
+            else:
+                continue
+            out.append(MarketOddsRow(
+                sport=sport,
+                home_team=home_team,
+                away_team=away_team,
+                commence_time=commence_time,
+                bookmaker=bookmaker,
+                market="spreads",
+                selection=selection,
+                line=float(point),
                 odds=float(price),
             ))
 

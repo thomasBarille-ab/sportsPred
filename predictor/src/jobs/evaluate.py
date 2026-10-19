@@ -258,6 +258,22 @@ def _bet_verdict(b: dict) -> tuple[str, bool] | None:
             return None
         return ("won" if won else "lost", won)
 
+    if market == "spreads":
+        line = float(b["line"])
+        margin = h - a
+        # home cover ⇔ margin + line > 0  (line = home_line_point)
+        # away cover ⇔ -margin + line > 0 (line = away_line_point)
+        if selection == "home":
+            diff = margin + line
+        elif selection == "away":
+            diff = -margin + line
+        else:
+            return None
+        if abs(diff) < 1e-6:
+            return ("void", False)
+        won = diff > 0
+        return ("won" if won else "lost", won)
+
     return None
 
 

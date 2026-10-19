@@ -92,10 +92,14 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
     upserted = upserted_markets = unmatched = 0
 
     for sport in ("ligue1", "nba", "france_nt"):
-        # Pour l'opening on fetch h2h + totals + btts sur Ligue 1 uniquement
-        # (totals/btts ne sont pas pertinents pour NBA ici, et le quota compte 1 req/market)
-        if sport == "ligue1" and not closing:
+        # À l'ouverture on étend les markets : Ligue 1 (h2h+totals+btts), NBA (h2h+totals+spreads).
+        # À la clôture on ne garde que h2h (CLV). Chaque market = 1 req au quota Odds API.
+        if closing:
+            markets = "h2h"
+        elif sport == "ligue1":
             markets = "h2h,totals,btts"
+        elif sport == "nba":
+            markets = "h2h,totals,spreads"
         else:
             markets = "h2h"
 

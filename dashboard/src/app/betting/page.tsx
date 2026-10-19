@@ -15,10 +15,16 @@ const MARKET_SHORT: Record<string, string> = {
   ou_total: "O/U",
   btts: "BTTS",
   double_chance: "DC",
+  spreads: "Spread",
 };
 
 function marketShort(market: string): string {
   return MARKET_SHORT[market] ?? market.toUpperCase();
+}
+
+function fmtSignedLine(line: number): string {
+  if (line === 0) return "0";
+  return line > 0 ? `+${line}` : `${line}`;
 }
 
 function selectionLabel(market: string, selection: string | null, line: number): string {
@@ -39,6 +45,10 @@ function selectionLabel(market: string, selection: string | null, line: number):
   if (market === "double_chance") {
     const map: Record<string, string> = { "1x": "1X", "12": "12", "x2": "X2" };
     return `DC ${map[selection] ?? selection.toUpperCase()}`;
+  }
+  if (market === "spreads") {
+    const side = selection === "home" ? "Home" : selection === "away" ? "Away" : selection;
+    return `${side} ${fmtSignedLine(line)}`;
   }
   return selection;
 }
