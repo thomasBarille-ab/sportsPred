@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 
@@ -15,6 +16,12 @@ import structlog
 
 from ..db import session
 from ..ingestion.odds_api import MarketOddsRow, OddsAPIProvider, OddsRow
+
+# Fenêtres pour décider si on fetch les cotes pour un sport donné.
+# But : économiser le quota Odds API quand un sport n'a aucun match prévu
+# (France NT joue ~1x/mois, NBA/Ligue 1 ont des offseasons).
+_OPENING_LOOKAHEAD_DAYS = 7
+_CLOSING_LOOKAHEAD_HOURS = 24
 
 log = structlog.get_logger()
 
@@ -77,7 +84,14 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
         log.warning("odds_ingest.skipped", reason="ODDS_API_KEY non configurée")
         return {"upserted": 0, "unmatched": 0}
 
-    horizon = datetime.now(UTC) + timedelta(days=7)
+    # Opening : horizon large pour fetcher les cotes des prochains matchs.
+    # Closing : horizon court (matchs du jour) car le but est le CLV.
+    now = datetime.now(UTC)
+    if closing:
+        horizon = now + timedelta(hours=_CLOSING_LOOKAHEAD_HOURS)
+    else:
+        horizon = now + timedelta(days=_OPENING_LOOKAHEAD_DAYS)
+
     fixtures = session.fetch_all(
         """
         SELECT id, sport, home_team_name, away_team_name, match_date
@@ -88,10 +102,22 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
         (horizon,),
     )
 
+    # Si aucun match dans la fenêtre pour un sport, on skip son appel API —
+    # évite de brûler du quota (France NT surtout, qui joue ~1x/mois).
+    fixtures_by_sport: dict[str, list[dict]] = defaultdict(list)
+    for f in fixtures:
+        fixtures_by_sport[f["sport"]].append(f)
+
     provider = OddsAPIProvider(api_key)
-    upserted = upserted_markets = unmatched = 0
+    upserted = upserted_markets = unmatched = skipped_sports = 0
 
     for sport in ("ligue1", "nba", "france_nt"):
+        if not fixtures_by_sport.get(sport):
+            log.info("odds_ingest.skipped_sport",
+                     sport=sport, closing=closing, reason="aucun match dans la fenêtre")
+            skipped_sports += 1
+            continue
+
         # À l'ouverture on étend les markets : Ligue 1 (h2h+totals+btts), NBA (h2h+totals+spreads).
         # À la clôture on ne garde que h2h (CLV). Chaque market = 1 req au quota Odds API.
         if closing:
@@ -155,10 +181,12 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
         upserted_h2h=upserted,
         upserted_markets=upserted_markets,
         unmatched=unmatched,
+        skipped_sports=skipped_sports,
         closing=closing,
     )
     return {
         "upserted": upserted,
         "upserted_markets": upserted_markets,
         "unmatched": unmatched,
+        "skipped_sports": skipped_sports,
     }
