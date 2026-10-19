@@ -213,39 +213,44 @@ export async function getUpcomingValueBets() {
   return sql`
     SELECT
       bs.id,
+      bs.fixture_id,
       f.home_team_name,
       f.away_team_name,
       f.match_date,
       f.sport,
+      bs.market,
+      bs.selection,
+      bs.line::float8                   AS line,
       bs.bet_outcome,
       bs.bookmaker,
-      ROUND(bs.odds_taken::numeric, 2)   AS odds_taken,
-      ROUND(bs.ev_pct::numeric, 4)       AS ev_pct,
-      ROUND(p.prob_home_win::numeric, 2) AS prob_home,
-      ROUND(p.prob_draw::numeric, 2)     AS prob_draw,
-      ROUND(p.prob_away_win::numeric, 2) AS prob_away
+      bs.odds_taken::float8             AS odds_taken,
+      bs.ev_pct::float8                 AS ev_pct
     FROM bet_simulations bs
     JOIN fixtures f ON f.id = bs.fixture_id
-    JOIN predictions p ON p.id = bs.prediction_id
     WHERE bs.status = 'pending'
-    ORDER BY f.match_date ASC
-    LIMIT 20
+    ORDER BY f.match_date ASC, bs.market, bs.selection
+    LIMIT 60
   `;
 }
 
-export async function getBetHistory(limit = 50) {
+export async function getBetHistory(limit = 100) {
   return sql`
     SELECT
+      bs.id,
+      bs.fixture_id,
       f.home_team_name,
       f.away_team_name,
       f.match_date,
       f.sport,
+      bs.market,
+      bs.selection,
+      bs.line::float8                   AS line,
       bs.bet_outcome,
       bs.bookmaker,
-      ROUND(bs.odds_taken::numeric, 2)  AS odds_taken,
-      ROUND(bs.ev_pct::numeric, 4)      AS ev_pct,
+      bs.odds_taken::float8             AS odds_taken,
+      bs.ev_pct::float8                 AS ev_pct,
       bs.status,
-      ROUND(bs.pnl_units::numeric, 2)   AS pnl_units,
+      bs.pnl_units::float8              AS pnl_units,
       bs.settled_at
     FROM bet_simulations bs
     JOIN fixtures f ON f.id = bs.fixture_id

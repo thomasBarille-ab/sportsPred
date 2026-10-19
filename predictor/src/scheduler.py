@@ -33,6 +33,7 @@ from .jobs.bet_simulation import run_bet_simulation
 from .jobs.context_agent import run_context_agent
 from .jobs.odds_backfill import run_odds_backfill
 from .jobs.odds_ingest import run_odds_ingest
+from .jobs.predict_markets import run_predict_markets
 from .llm_client import get_metrics as get_llm_metrics
 from .llm_client import reset_metrics as reset_llm_metrics
 from .log_capture import capture_steps
@@ -143,6 +144,10 @@ def _job_context_agent(cfg: Settings) -> None:
 
 def _job_bet_simulation(cfg: Settings) -> None:
     _log_job("bet_simulation", None, run_bet_simulation, cfg.discord_webhook_url)
+
+
+def _job_predict_markets(cfg: Settings) -> None:
+    _log_job("predict_markets", "ligue1", run_predict_markets)
 
 
 
@@ -315,6 +320,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_predict(cfg),
         CronTrigger(hour=(h + 1) % 24, minute=0),
         id="predict", name="Génération prédictions",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_predict_markets(cfg),
+        CronTrigger(hour=(h + 1) % 24, minute=5),
+        id="predict_markets", name="Prédictions multi-markets (O/U, BTTS, DC) Ligue 1",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(

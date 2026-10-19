@@ -162,15 +162,18 @@ def run_evaluate(sport: str) -> int:
 
 
 def _settle_bets(sport: str) -> None:
-    """Settle les bet_simulations pending dont le résultat est maintenant connu."""
+    """Settle les bet_simulations pending dont le résultat est maintenant connu.
+    Gère tous les markets (h2h, ou_total, btts, double_chance)."""
     pending = session.fetch_all(
         """
-        SELECT bs.id, bs.fixture_id, bs.odds_taken, bs.stake_units, bs.bet_outcome
+        SELECT bs.id, bs.fixture_id, bs.odds_taken, bs.stake_units,
+               bs.market, bs.selection, bs.line,
+               r.home_score, r.away_score, r.actual_outcome
         FROM bet_simulations bs
         JOIN fixtures f ON f.id = bs.fixture_id
         JOIN results r ON r.fixture_id = bs.fixture_id
         WHERE f.sport = %s AND bs.status = 'pending'
-          AND bs.bet_outcome IS NOT NULL
+          AND bs.selection IS NOT NULL
         """,
         (sport,),
     )
@@ -178,38 +181,24 @@ def _settle_bets(sport: str) -> None:
     if not pending:
         return
 
-    n_won = n_lost = 0
+    n_won = n_lost = n_void = 0
     for b in pending:
-        actual = session.fetch_one(
-            "SELECT actual_outcome FROM results WHERE fixture_id = %s",
-            (b["fixture_id"],),
-        )
-        if not actual:
+        verdict = _bet_verdict(b)
+        if verdict is None:
             continue
+        status, won = verdict
 
-        won = actual["actual_outcome"] == b["bet_outcome"]
-        pnl = b["stake_units"] * (b["odds_taken"] - 1) if won else -b["stake_units"]
-        status = "won" if won else "lost"
+        if status == "void":
+            pnl = 0.0
+            n_void += 1
+        elif won:
+            pnl = b["stake_units"] * (b["odds_taken"] - 1)
+            n_won += 1
+        else:
+            pnl = -b["stake_units"]
+            n_lost += 1
 
-        # CLV = (cote prise / cote de clôture) - 1
-        clv: float | None = None
-        closing_row = session.fetch_one(
-            """
-            SELECT odds_home, odds_draw, odds_away
-            FROM match_odds
-            WHERE fixture_id = %s AND closing = TRUE
-            ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END
-            LIMIT 1
-            """,
-            (b["fixture_id"],),
-        )
-        if closing_row:
-            col_map = {"home": "odds_home", "draw": "odds_draw", "away": "odds_away"}
-            col = col_map.get(b["bet_outcome"])
-            if col:
-                closing_odd = closing_row.get(col)
-                if closing_odd and float(closing_odd) > 1:
-                    clv = round(float(b["odds_taken"]) / float(closing_odd) - 1, 4)
+        clv = _compute_h2h_clv(b) if b["market"] == "h2h" else None
 
         session.execute(
             """
@@ -219,7 +208,78 @@ def _settle_bets(sport: str) -> None:
             """,
             (status, round(pnl, 4), clv, b["id"]),
         )
-        if won: n_won += 1
-        else:   n_lost += 1
 
-    log.info("evaluate.bets_settled", sport=sport, won=n_won, lost=n_lost)
+    log.info("evaluate.bets_settled", sport=sport, won=n_won, lost=n_lost, void=n_void)
+
+
+def _bet_verdict(b: dict) -> tuple[str, bool] | None:
+    """Détermine (status, won) pour un pari. Retourne None si impossible à régler."""
+    market = b["market"]
+    selection = b["selection"]
+    h = b["home_score"]
+    a = b["away_score"]
+
+    if market == "h2h":
+        actual = b.get("actual_outcome")
+        if not actual:
+            return None
+        won = actual == selection
+        return ("won" if won else "lost", won)
+
+    if market == "ou_total":
+        line = float(b["line"])
+        total = h + a
+        if abs(total - line) < 1e-6:
+            return ("void", False)
+        over = total > line
+        if selection == "over":
+            return ("won" if over else "lost", over)
+        if selection == "under":
+            return ("won" if not over else "lost", not over)
+        return None
+
+    if market == "btts":
+        yes = h >= 1 and a >= 1
+        if selection == "yes":
+            return ("won" if yes else "lost", yes)
+        if selection == "no":
+            return ("won" if not yes else "lost", not yes)
+        return None
+
+    if market == "double_chance":
+        home_win, draw, away_win = h > a, h == a, h < a
+        if selection == "1x":
+            won = home_win or draw
+        elif selection == "12":
+            won = home_win or away_win
+        elif selection == "x2":
+            won = draw or away_win
+        else:
+            return None
+        return ("won" if won else "lost", won)
+
+    return None
+
+
+def _compute_h2h_clv(b: dict) -> float | None:
+    """CLV = (cote_prise / cote_clôture) - 1 — défini uniquement pour h2h."""
+    closing_row = session.fetch_one(
+        """
+        SELECT odds_home, odds_draw, odds_away
+        FROM match_odds
+        WHERE fixture_id = %s AND closing = TRUE
+        ORDER BY CASE WHEN bookmaker = 'pinnacle' THEN 0 ELSE 1 END
+        LIMIT 1
+        """,
+        (b["fixture_id"],),
+    )
+    if not closing_row:
+        return None
+    col_map = {"home": "odds_home", "draw": "odds_draw", "away": "odds_away"}
+    col = col_map.get(b["selection"])
+    if not col:
+        return None
+    closing_odd = closing_row.get(col)
+    if closing_odd and float(closing_odd) > 1:
+        return round(float(b["odds_taken"]) / float(closing_odd) - 1, 4)
+    return None

@@ -220,13 +220,14 @@ def _tool_get_value_bets() -> list[dict]:
     rows = session.fetch_all(
         """
         SELECT f.sport, f.home_team_name, f.away_team_name, f.match_date,
+               bs.market, bs.selection, bs.line,
                bs.bet_outcome, bs.odds_taken, bs.ev_pct, bs.bookmaker,
                p.predicted_outcome,
                ROUND(p.prob_home_win::numeric, 2) AS p_home,
                ROUND(p.prob_away_win::numeric, 2) AS p_away
         FROM bet_simulations bs
         JOIN fixtures f ON f.id = bs.fixture_id
-        JOIN predictions p ON p.id = bs.prediction_id
+        LEFT JOIN predictions p ON p.id = bs.prediction_id
         WHERE bs.status = 'pending' AND bs.ev_pct > 0
         ORDER BY bs.ev_pct DESC
         LIMIT 15

@@ -1,10 +1,11 @@
 """Job de simulation de paris : calcule l'EV pour chaque prédiction fraîche
-et insère dans bet_simulations si EV > seuil.
+et insère dans bet_simulations.
 
 EV% = (model_prob × decimal_odds) - 1
 
-Une seule ligne par fixture (UNIQUE constraint). On bet sur l'outcome
-avec le meilleur EV parmi ceux au-dessus du seuil.
+Deux passes :
+  1. h2h : parie l'outcome prédit par le modèle (quel que soit l'EV).
+  2. markets dérivés (O/U, BTTS) : parie uniquement si EV > _MIN_EV_PCT.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ def _best_ev(
 
 
 def _fetch_candidates() -> list[dict]:
+    """h2h : fixtures sans pari h2h simulé, avec cotes dispo."""
     return session.fetch_all(
         """
         SELECT DISTINCT ON (p.fixture_id)
@@ -65,13 +67,57 @@ def _fetch_candidates() -> list[dict]:
         FROM predictions p
         JOIN fixtures f ON f.id = p.fixture_id
         JOIN match_odds mo ON mo.fixture_id = p.fixture_id
-        LEFT JOIN bet_simulations bs ON bs.fixture_id = p.fixture_id
+        LEFT JOIN bet_simulations bs
+          ON bs.fixture_id = p.fixture_id AND bs.market = 'h2h'
         WHERE bs.id IS NULL
           AND f.status IN ('SCHEDULED', 'TIMED')
           AND f.match_date >= NOW() - INTERVAL '48 hours'
         ORDER BY p.fixture_id,
           CASE WHEN mo.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
           mo.fetched_at DESC
+        """
+    )
+
+
+def _fetch_market_candidates() -> list[dict]:
+    """Markets dérivés : pour chaque (fixture, market, selection, line) prédit,
+    la meilleure cote dispo (Pinnacle en priorité). Exclut les paris déjà simulés."""
+    return session.fetch_all(
+        """
+        WITH ranked AS (
+          SELECT
+            pm.fixture_id,
+            pm.market,
+            pm.selection,
+            pm.line,
+            pm.prob,
+            mom.bookmaker,
+            mom.odds,
+            ROW_NUMBER() OVER (
+              PARTITION BY pm.fixture_id, pm.market, pm.selection, pm.line
+              ORDER BY CASE WHEN mom.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+                       mom.fetched_at DESC
+            ) AS rn
+          FROM predictions_markets pm
+          JOIN match_odds_markets mom
+            ON mom.fixture_id = pm.fixture_id
+           AND mom.market     = pm.market
+           AND mom.selection  = pm.selection
+           AND mom.line       = pm.line
+           AND mom.closing    = FALSE
+          JOIN fixtures f ON f.id = pm.fixture_id
+          LEFT JOIN bet_simulations bs
+            ON bs.fixture_id = pm.fixture_id
+           AND bs.market     = pm.market
+           AND bs.selection  = pm.selection
+           AND bs.line       = pm.line
+          WHERE bs.id IS NULL
+            AND f.status IN ('SCHEDULED', 'TIMED')
+            AND f.match_date >= NOW() - INTERVAL '48 hours'
+        )
+        SELECT fixture_id, market, selection, line, prob, bookmaker, odds
+        FROM ranked
+        WHERE rn = 1
         """
     )
 
@@ -124,18 +170,19 @@ def _run(discord_webhook_url: str = "") -> dict:
             session.execute(
                 """
                 INSERT INTO bet_simulations
-                  (fixture_id, prediction_id, bookmaker, market,
+                  (fixture_id, prediction_id, bookmaker, market, selection, line,
                    odds_taken, ev_pct, stake_units, bet_outcome)
-                VALUES (%s,%s,%s,'h2h',%s,%s,1.0,%s)
-                ON CONFLICT (fixture_id) DO NOTHING
+                VALUES (%s,%s,%s,'h2h',%s,0,%s,%s,1.0,%s)
+                ON CONFLICT (fixture_id, market, selection, line) DO NOTHING
                 """,
                 (
                     row["fixture_id"],
                     row["prediction_id"],
                     row["bookmaker"],
+                    bet_outcome,          # selection
                     odds_taken,
                     round(ev_pct, 6),
-                    bet_outcome,
+                    bet_outcome,          # bet_outcome legacy
                 ),
             )
             n_simulated += 1
@@ -156,9 +203,66 @@ def _run(discord_webhook_url: str = "") -> dict:
             log.error("bet_simulation.insert_error",
                       fixture_id=row["fixture_id"], error=str(exc))
 
+    # ── Passe 2 : markets dérivés (O/U, BTTS) — seuil EV strict ──────────────
+    market_rows = _fetch_market_candidates()
+    log.info("bet_simulation.markets_start", candidats=len(market_rows))
+    n_mkt_sim = n_mkt_value = 0
+
+    for row in market_rows:
+        try:
+            odds = float(row["odds"])
+            prob = float(row["prob"])
+            if odds <= 1:
+                continue
+            ev = prob * odds - 1
+            if ev < _MIN_EV_PCT:
+                continue
+
+            session.execute(
+                """
+                INSERT INTO bet_simulations
+                  (fixture_id, prediction_id, bookmaker, market, selection, line,
+                   odds_taken, ev_pct, stake_units, bet_outcome)
+                VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, 1.0, NULL)
+                ON CONFLICT (fixture_id, market, selection, line) DO NOTHING
+                """,
+                (
+                    row["fixture_id"],
+                    row["bookmaker"],
+                    row["market"],
+                    row["selection"],
+                    row["line"],
+                    odds,
+                    round(ev, 6),
+                ),
+            )
+            n_mkt_sim += 1
+            if ev > 0:
+                n_mkt_value += 1
+            log.info(
+                "bet_simulation.market_simulated",
+                fixture_id=row["fixture_id"],
+                market=row["market"],
+                selection=row["selection"],
+                line=float(row["line"]),
+                odds=round(odds, 2),
+                ev_pct=f"{ev:.1%}",
+                bookmaker=row["bookmaker"],
+            )
+        except Exception as exc:
+            log.error("bet_simulation.market_insert_error",
+                      fixture_id=row["fixture_id"], error=str(exc))
+
     log.info(
         "bet_simulation.done",
         simulated=n_simulated,
         value_bets=n_value_bets,
+        market_simulated=n_mkt_sim,
+        market_value_bets=n_mkt_value,
     )
-    return {"simulated": n_simulated, "value_bets": n_value_bets}
+    return {
+        "simulated": n_simulated + n_mkt_sim,
+        "value_bets": n_value_bets + n_mkt_value,
+        "h2h_simulated": n_simulated,
+        "market_simulated": n_mkt_sim,
+    }

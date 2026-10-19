@@ -14,7 +14,7 @@ from difflib import SequenceMatcher
 import structlog
 
 from ..db import session
-from ..ingestion.odds_api import OddsAPIProvider, OddsRow
+from ..ingestion.odds_api import MarketOddsRow, OddsAPIProvider, OddsRow
 
 log = structlog.get_logger()
 
@@ -46,11 +46,11 @@ def _sim(a: str, b: str) -> float:
 
 
 def _find_fixture_id(
-    row: OddsRow,
+    row: OddsRow | MarketOddsRow,
     fixtures: list[dict],
     window_hours: int = 4,
 ) -> int | None:
-    """Trouve le fixture_id correspondant à un OddsRow par datetime + noms d'équipes."""
+    """Trouve le fixture_id correspondant à un row par datetime + noms d'équipes."""
     t = row.commence_time
     best_id: int | None = None
     best_score = 0.0
@@ -89,16 +89,23 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
     )
 
     provider = OddsAPIProvider(api_key)
-    upserted = unmatched = 0
+    upserted = upserted_markets = unmatched = 0
 
     for sport in ("ligue1", "nba", "france_nt"):
+        # Pour l'opening on fetch h2h + totals + btts sur Ligue 1 uniquement
+        # (totals/btts ne sont pas pertinents pour NBA ici, et le quota compte 1 req/market)
+        if sport == "ligue1" and not closing:
+            markets = "h2h,totals,btts"
+        else:
+            markets = "h2h"
+
         try:
-            odds_rows = provider.fetch_upcoming_odds(sport)
+            h2h_rows, market_rows = provider.fetch_upcoming_odds(sport, markets=markets)
         except Exception as exc:
             log.error("odds_ingest.fetch_error", sport=sport, error=str(exc))
             continue
 
-        for row in odds_rows:
+        for row in h2h_rows:
             fixture_id = _find_fixture_id(row, fixtures)
             if fixture_id is None:
                 unmatched += 1
@@ -120,5 +127,34 @@ def run_odds_ingest(api_key: str, closing: bool = False) -> dict:
             )
             upserted += 1
 
-    log.info("odds_ingest.done", upserted=upserted, unmatched=unmatched, closing=closing)
-    return {"upserted": upserted, "unmatched": unmatched}
+        for mrow in market_rows:
+            fixture_id = _find_fixture_id(mrow, fixtures)
+            if fixture_id is None:
+                unmatched += 1
+                continue
+
+            session.execute(
+                """
+                INSERT INTO match_odds_markets
+                    (fixture_id, bookmaker, market, selection, line, odds, source, closing)
+                VALUES (%s, %s, %s, %s, %s, %s, 'odds_api', %s)
+                ON CONFLICT (fixture_id, bookmaker, market, selection, line, closing) DO UPDATE
+                  SET odds = EXCLUDED.odds, fetched_at = NOW()
+                """,
+                (fixture_id, mrow.bookmaker, mrow.market, mrow.selection,
+                 mrow.line, mrow.odds, closing),
+            )
+            upserted_markets += 1
+
+    log.info(
+        "odds_ingest.done",
+        upserted_h2h=upserted,
+        upserted_markets=upserted_markets,
+        unmatched=unmatched,
+        closing=closing,
+    )
+    return {
+        "upserted": upserted,
+        "upserted_markets": upserted_markets,
+        "unmatched": unmatched,
+    }

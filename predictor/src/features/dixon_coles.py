@@ -61,6 +61,28 @@ class DCModel:
         mu  = a_a * d_h
         return lam, mu
 
+    def score_matrix(
+        self,
+        home_team: str,
+        away_team: str,
+        max_goals: int = 10,
+    ) -> np.ndarray:
+        """Matrice P(home_score=i, away_score=j) normalisée. Base de tous les markets."""
+        lam, mu = self.predict_goals(home_team, away_team)
+        xs = np.arange(max_goals + 1)
+        pmf_home = poisson.pmf(xs, lam)
+        pmf_away = poisson.pmf(xs, mu)
+        matrix = np.outer(pmf_home, pmf_away)
+        # Correction Dixon-Coles sur les scores faibles
+        matrix[0, 0] *= max(1e-10, 1.0 - lam * mu * self.rho)
+        matrix[0, 1] *= 1.0 + lam * self.rho
+        matrix[1, 0] *= 1.0 + mu * self.rho
+        matrix[1, 1] *= max(1e-10, 1.0 - self.rho)
+        total = matrix.sum()
+        if total < 1e-9:
+            return matrix
+        return matrix / total
+
     def predict_proba(
         self,
         home_team: str,
@@ -68,25 +90,61 @@ class DCModel:
         max_goals: int = 10,
     ) -> tuple[float, float, float]:
         """Retourne (p_home_win, p_draw, p_away_win)."""
-        lam, mu = self.predict_goals(home_team, away_team)
-        p_home = p_draw = p_away = 0.0
-
-        for x in range(max_goals + 1):
-            for y in range(max_goals + 1):
-                p = (_tau(x, y, lam, mu, self.rho)
-                     * poisson.pmf(x, lam)
-                     * poisson.pmf(y, mu))
-                if x > y:
-                    p_home += p
-                elif x == y:
-                    p_draw += p
-                else:
-                    p_away += p
-
-        total = p_home + p_draw + p_away
-        if total < 1e-9:
+        m = self.score_matrix(home_team, away_team, max_goals)
+        if m.sum() < 1e-9:
             return 1/3, 1/3, 1/3
-        return p_home / total, p_draw / total, p_away / total
+        n = m.shape[0]
+        rows, cols = np.indices((n, n))
+        p_home = float(m[rows > cols].sum())
+        p_draw = float(np.trace(m))
+        p_away = float(m[rows < cols].sum())
+        return p_home, p_draw, p_away
+
+    def predict_over_under(
+        self,
+        home_team: str,
+        away_team: str,
+        line: float = 2.5,
+        max_goals: int = 10,
+    ) -> tuple[float, float]:
+        """Retourne (p_over, p_under) pour un total de buts > line.
+
+        line = 2.5 → over = total >= 3, under = total <= 2. Pas de push possible
+        pour les lines demi-entières (2.5, 3.5, …).
+        """
+        m = self.score_matrix(home_team, away_team, max_goals)
+        n = m.shape[0]
+        rows, cols = np.indices((n, n))
+        totals = rows + cols
+        p_over  = float(m[totals > line].sum())
+        p_under = float(m[totals < line].sum())
+        # Normalisation (push écarté — pour les demi-lignes, p_push = 0)
+        total = p_over + p_under
+        if total < 1e-9:
+            return 0.5, 0.5
+        return p_over / total, p_under / total
+
+    def predict_btts(
+        self,
+        home_team: str,
+        away_team: str,
+        max_goals: int = 10,
+    ) -> tuple[float, float]:
+        """Retourne (p_yes, p_no) pour Both Teams To Score."""
+        m = self.score_matrix(home_team, away_team, max_goals)
+        p_yes = float(m[1:, 1:].sum())   # home>=1 AND away>=1
+        p_no  = float(m.sum() - p_yes)
+        return p_yes, p_no
+
+    def predict_double_chance(
+        self,
+        home_team: str,
+        away_team: str,
+        max_goals: int = 10,
+    ) -> tuple[float, float, float]:
+        """Retourne (p_1x, p_12, p_x2) dérivé des probas h2h."""
+        p_home, p_draw, p_away = self.predict_proba(home_team, away_team, max_goals)
+        return p_home + p_draw, p_home + p_away, p_draw + p_away
 
 
 # ─────────────────────────────────────────────────────────────────────────────
