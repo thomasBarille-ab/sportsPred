@@ -57,8 +57,16 @@ def _find_fixture_id(
     fixtures: list[dict],
     window_hours: int = 4,
 ) -> int | None:
-    """Trouve le fixture_id correspondant à un row par datetime + noms d'équipes."""
+    """Trouve le fixture_id correspondant à un row par datetime + noms d'équipes.
+
+    NB : balldontlie v1 stocke les fixtures NBA à minuit UTC de la date US ET
+    du match (l'heure réelle est dans le champ `status`, pas parsée). L'écart
+    avec le commence_time réel de l'Odds API peut atteindre ~30h. On élargit
+    donc la fenêtre pour NBA et on compte sur la similarité des noms d'équipes
+    pour désambiguïser deux matchs voisins.
+    """
     t = row.commence_time
+    effective_window = 30 if row.sport == "nba" else window_hours
     best_id: int | None = None
     best_score = 0.0
 
@@ -68,7 +76,7 @@ def _find_fixture_id(
         mt = f["match_date"]
         if mt.tzinfo is None:
             mt = mt.replace(tzinfo=UTC)
-        if abs((mt - t).total_seconds()) > window_hours * 3600:
+        if abs((mt - t).total_seconds()) > effective_window * 3600:
             continue
         score = _sim(row.home_team, f["home_team_name"]) + _sim(row.away_team, f["away_team_name"])
         if score > best_score:

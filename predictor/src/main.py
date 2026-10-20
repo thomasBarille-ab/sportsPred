@@ -145,6 +145,54 @@ def _backfill_rounds_if_needed(cfg: Settings) -> None:
         log.warning("bootstrap.backfill_rounds.error", error=str(exc))
 
 
+def _backfill_bets_if_needed(cfg: Settings) -> None:
+    """Si des prédictions récentes n'ont pas de pari h2h, refetch odds + simule.
+
+    Idempotent : s'exécute uniquement si la DB montre un gap entre predictions
+    et bet_simulations. Après la première exécution, le gap est comblé → les
+    restarts suivants ne refont rien.
+    """
+    log = structlog.get_logger()
+
+    missing = session.fetch_one(
+        """
+        SELECT COUNT(*) AS n
+        FROM predictions p
+        JOIN fixtures f ON f.id = p.fixture_id
+        LEFT JOIN bet_simulations bs
+          ON bs.fixture_id = p.fixture_id AND bs.market = 'h2h'
+        WHERE bs.id IS NULL
+          AND f.status IN ('SCHEDULED', 'TIMED')
+          AND f.match_date >= NOW()
+          AND f.match_date <= NOW() + INTERVAL '7 days'
+        """
+    )
+    if not missing or missing["n"] == 0:
+        return
+
+    log.info("bootstrap.backfill_bets.start", missing_bets=missing["n"])
+
+    from .jobs.bet_simulation import run_bet_simulation
+    from .jobs.odds_ingest import run_odds_ingest
+    from .jobs.predict_markets import run_predict_markets
+
+    try:
+        run_odds_ingest(cfg.odds_api_key, closing=False)
+    except Exception as exc:
+        log.error("bootstrap.backfill_bets.odds_error", error=str(exc))
+
+    try:
+        run_predict_markets()
+    except Exception as exc:
+        log.error("bootstrap.backfill_bets.predict_markets_error", error=str(exc))
+
+    try:
+        result = run_bet_simulation(cfg.discord_webhook_url)
+        log.info("bootstrap.backfill_bets.done", **result)
+    except Exception as exc:
+        log.error("bootstrap.backfill_bets.simulate_error", error=str(exc))
+
+
 def _maybe_retrain_if_no_model(cfg: Settings) -> None:
     """Lance le retrain si aucun modèle en production et assez de données."""
     from .jobs.retrain import run_retrain
@@ -191,6 +239,7 @@ def main() -> None:
     _backfill_rounds_if_needed(cfg)
     _bootstrap_france_nt(cfg)
     _maybe_retrain_if_no_model(cfg)
+    _backfill_bets_if_needed(cfg)
 
     # Démarre le scheduler (bloquant — ne retourne jamais)
     from .scheduler import start_scheduler
