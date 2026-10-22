@@ -25,11 +25,11 @@ export default async function ModelsPage() {
                 <th className="text-left py-2 pr-4">Version</th>
                 <th className="text-left py-2 pr-4">Entraîné le</th>
                 <th className="text-left py-2 pr-4">Variante</th>
-                <th className="text-right py-2 pr-4">Train samples</th>
-                <th className="text-right py-2 pr-4">Holdout</th>
-                <th className="text-right py-2 pr-4">Brier ↓</th>
-                <th className="text-right py-2 pr-4">Log-loss ↓</th>
-                <th className="text-right py-2 pr-4">Accuracy ↑</th>
+                <th className="text-right py-2 pr-4">Train samples <span className="font-normal text-slate-500">(données entraîn.)</span></th>
+                <th className="text-right py-2 pr-4">Holdout <span className="font-normal text-slate-500">(données test)</span></th>
+                <th className="text-right py-2 pr-4">Brier ↓ <span className="font-normal text-slate-500">(erreur proba)</span></th>
+                <th className="text-right py-2 pr-4">Log-loss ↓ <span className="font-normal text-slate-500">(confiance log)</span></th>
+                <th className="text-right py-2 pr-4">Accuracy ↑ <span className="font-normal text-slate-500">(% corrects)</span></th>
                 <th className="text-center py-2">Statut</th>
               </tr>
             </thead>

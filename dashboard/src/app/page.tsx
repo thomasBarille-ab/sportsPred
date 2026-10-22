@@ -4,10 +4,13 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-async function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+async function StatCard({ label, desc, value, sub }: { label: string; desc?: string; value: string; sub?: string }) {
   return (
     <div className="card">
-      <div className="stat-label">{label}</div>
+      <div className="stat-label">
+        {label}
+        {desc && <span className="text-xs font-normal text-slate-500 ml-1">({desc})</span>}
+      </div>
       <div className="stat-value mt-2">{value}</div>
       {sub && <div className="text-xs text-muted mt-1">{sub}</div>}
     </div>
@@ -40,13 +43,14 @@ export default async function Home() {
         <h2 className="text-lg font-semibold mb-4 text-muted">Ligue 1 — 30 derniers jours</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Prédictions scorées" value={String(l1?.total ?? 0)} />
-          <StatCard label="Accuracy" value={`${((Number(l1?.accuracy) || 0) * 100).toFixed(1)}%`} />
+          <StatCard label="Accuracy" desc="% de bons résultats" value={`${((Number(l1?.accuracy) || 0) * 100).toFixed(1)}%`} />
           <StatCard
-            label="Brier modèle"
+            label="Brier"
+            desc="erreur de probabilité"
             value={l1?.avgBrier ?? "—"}
             sub={l1?.avgMarketBrier ? `marché : ${l1.avgMarketBrier} · ↓ meilleur` : "↓ meilleur · baseline 0.667"}
           />
-          <StatCard label="Log-loss moyen" value={l1?.avgLogloss ?? "—"} sub="↓ meilleur" />
+          <StatCard label="Log-loss" desc="pénalise la confiance" value={l1?.avgLogloss ?? "—"} sub="↓ meilleur" />
         </div>
       </section>
 
@@ -54,13 +58,14 @@ export default async function Home() {
         <h2 className="text-lg font-semibold mb-4 text-muted">NBA — 30 derniers jours</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Prédictions scorées" value={String(nba?.total ?? 0)} />
-          <StatCard label="Accuracy" value={`${((Number(nba?.accuracy) || 0) * 100).toFixed(1)}%`} />
+          <StatCard label="Accuracy" desc="% de bons résultats" value={`${((Number(nba?.accuracy) || 0) * 100).toFixed(1)}%`} />
           <StatCard
-            label="Brier modèle"
+            label="Brier"
+            desc="erreur de probabilité"
             value={nba?.avgBrier ?? "—"}
             sub={nba?.avgMarketBrier ? `marché : ${nba.avgMarketBrier} · ↓ meilleur` : "↓ meilleur · baseline 0.25"}
           />
-          <StatCard label="Log-loss moyen" value={nba?.avgLogloss ?? "—"} sub="↓ meilleur" />
+          <StatCard label="Log-loss" desc="pénalise la confiance" value={nba?.avgLogloss ?? "—"} sub="↓ meilleur" />
         </div>
       </section>
 

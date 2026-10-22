@@ -168,9 +168,12 @@ export default async function BettingPage() {
       {/* Upcoming — flat table, one row per bet, grouped by match via <details> */}
       {upcoming.length > 0 && (
         <div className="bg-card border border-border rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-white mb-4">
+          <h2 className="text-sm font-semibold text-white mb-1">
             Paris à venir ({upcoming.length} paris sur {upcomingGroups.length} match{upcomingGroups.length > 1 ? "s" : ""})
           </h2>
+          <p className="text-xs text-slate-500 mb-4">
+            1X2 = victoire dom./nul/ext. · O/U = Over/Under total buts · BTTS = les 2 équipes marquent · DC = Double Chance
+          </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -180,7 +183,7 @@ export default async function BettingPage() {
                   <th className="text-left py-2 pr-4">Market</th>
                   <th className="text-left py-2 pr-4">Pari</th>
                   <th className="text-left py-2 pr-4">Cote</th>
-                  <th className="text-left py-2 pr-4">EV</th>
+                  <th className="text-left py-2 pr-4">EV <span className="font-normal text-slate-500">(espérance de gain)</span></th>
                   <th className="text-left py-2">Bookmaker</th>
                 </tr>
               </thead>
@@ -277,7 +280,7 @@ export default async function BettingPage() {
                     <th className="text-left py-2 pr-4">Market</th>
                     <th className="text-left py-2 pr-4">Pari</th>
                     <th className="text-left py-2 pr-4">Cote</th>
-                    <th className="text-left py-2 pr-4">EV</th>
+                    <th className="text-left py-2 pr-4">EV <span className="font-normal text-slate-500 normal-case">(espérance)</span></th>
                     <th className="text-left py-2 pr-4">Résultat</th>
                     <th className="text-left py-2">P&L</th>
                   </tr>
