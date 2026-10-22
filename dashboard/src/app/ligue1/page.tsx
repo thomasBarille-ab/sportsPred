@@ -26,9 +26,9 @@ const OUTCOME_STYLE: Record<string, string> = {
 
 export default async function Ligue1Page() {
   const [accuracy, calibration, recent, matchdays] = await Promise.all([
-    getAccuracyOverTime("ligue1"),
-    getCalibrationData("ligue1"),
-    getRecentPredictions("ligue1", 25),
+    getAccuracyOverTime("ligue1").catch(() => []),
+    getCalibrationData("ligue1").catch(() => []),
+    getRecentPredictions("ligue1", 25).catch(() => []),
     getMatchdaySummary("ligue1").catch(() => []),
   ]);
 

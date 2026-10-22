@@ -23,9 +23,9 @@ const OUTCOME_STYLE: Record<string, string> = {
 
 export default async function NbaPage() {
   const [accuracy, calibration, recent] = await Promise.all([
-    getAccuracyOverTime("nba"),
-    getCalibrationData("nba"),
-    getRecentPredictions("nba", 25),
+    getAccuracyOverTime("nba").catch(() => []),
+    getCalibrationData("nba").catch(() => []),
+    getRecentPredictions("nba", 25).catch(() => []),
   ]);
 
   const now = new Date();

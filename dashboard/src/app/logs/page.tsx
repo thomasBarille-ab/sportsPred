@@ -14,7 +14,10 @@ const STATUS_STYLES: Record<string, string> = {
 const JOBS = ["ingest", "predict", "evaluate", "retrain"];
 
 export default async function LogsPage() {
-  const [logs, monthlyCosts] = await Promise.all([getAgentLogs(100), getMonthlyCost()]);
+  const [logs, monthlyCosts] = await Promise.all([
+    getAgentLogs(100).catch(() => []),
+    getMonthlyCost(),
+  ]);
 
   const counts = (logs as any[]).reduce(
     (acc: Record<string, number>, l: any) => {

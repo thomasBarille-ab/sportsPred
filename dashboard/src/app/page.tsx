@@ -16,9 +16,9 @@ async function StatCard({ label, value, sub }: { label: string; value: string; s
 
 export default async function Home() {
   const [l1, nba, summary] = await Promise.all([
-    getOverviewStats("ligue1", 30),
-    getOverviewStats("nba", 30),
-    getLatestSummary(),
+    getOverviewStats("ligue1", 30).catch(() => null),
+    getOverviewStats("nba", 30).catch(() => null),
+    getLatestSummary().catch(() => null),
   ]);
 
   return (

@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 
 export default async function ModelsPage() {
   const [l1Models, nbaModels, l1Importances, nbaImportances] = await Promise.all([
-    getModelVersions("ligue1"),
-    getModelVersions("nba"),
+    getModelVersions("ligue1").catch(() => []),
+    getModelVersions("nba").catch(() => []),
     getFeatureImportances("ligue1"),
     getFeatureImportances("nba"),
   ]);

@@ -55,9 +55,9 @@ function CompBadge({ code }: { code: string }) {
 
 export default async function FrancePage() {
   const [accuracy, calibration, recent, upcoming, compStats] = await Promise.all([
-    getAccuracyOverTime("france_nt"),
-    getCalibrationData("france_nt"),
-    getRecentPredictions("france_nt", 30),
+    getAccuracyOverTime("france_nt").catch(() => []),
+    getCalibrationData("france_nt").catch(() => []),
+    getRecentPredictions("france_nt", 30).catch(() => []),
     getFranceNTUpcoming(8).catch(() => []),
     getFranceNTCompetitionStats().catch(() => []),
   ]);
