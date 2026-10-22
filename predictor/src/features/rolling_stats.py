@@ -95,6 +95,7 @@ def compute_rolling_stats(
         "drtg": 100.0,
         "net_rtg": 0.0,
         "win_rate": 0.5,
+        "win_slope": 0.0,
         "is_back2back": 0.0,
         "n_games": 0.0,
     }
@@ -128,11 +129,22 @@ def compute_rolling_stats(
     ortg = sum(ortg_vals) / len(ortg_vals) if ortg_vals else 100.0
     drtg = sum(drtg_vals) / len(drtg_vals) if drtg_vals else 100.0
 
+    # Pente de la série de victoires (plus ancien → plus récent) : positif = équipe en hausse
+    if n >= 2:
+        x_mean = (n - 1) / 2.0
+        y_mean = sum(wins) / n
+        num = sum((i - x_mean) * (wins[i] - y_mean) for i in range(n))
+        den = sum((i - x_mean) ** 2 for i in range(n))
+        win_slope = num / den if den > 0 else 0.0
+    else:
+        win_slope = 0.0
+
     return {
         "ortg": ortg,
         "drtg": drtg,
         "net_rtg": ortg - drtg,
         "win_rate": sum(wins) / n,
+        "win_slope": win_slope,
         "is_back2back": is_b2b,
         "n_games": float(n),
     }

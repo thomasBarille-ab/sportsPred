@@ -18,10 +18,10 @@ from ..db import session
 
 log = structlog.get_logger()
 
-IMPROVEMENT_THRESHOLD = 0.002  # fallback si holdout trop petit pour le bootstrap
+IMPROVEMENT_THRESHOLD = 0.001  # fallback si holdout trop petit pour le bootstrap
 MIN_HOLDOUT_SAMPLES   = 50
 _BOOTSTRAP_N          = 1000
-_BOOTSTRAP_CONFIDENCE = 0.95
+_BOOTSTRAP_CONFIDENCE = 0.80  # 80% : promeut quand le challenger est probablement meilleur
 
 
 def _bootstrap_brier_delta_ci(

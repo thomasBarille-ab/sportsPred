@@ -1,6 +1,6 @@
 """Construit le vecteur de features pour un match donné.
 
-Ligue 1 features (33) :
+Ligue 1 features (35) :
   elo_home, elo_away, elo_diff,
   dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
@@ -12,17 +12,19 @@ Ligue 1 features (33) :
   implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
   home_injuries_count, away_injuries_count,  [agent contexte]
   home_rotation_signal, away_rotation_signal,
-  weather_rain_mm, weather_wind_kmh
+  weather_rain_mm, weather_wind_kmh,
+  home_form_slope, away_form_slope  [pente pts/match sur les 5 derniers matchs]
 
-NBA features (21) :
+NBA features (23) :
   elo_home, elo_away, elo_diff,
   home_ortg, home_drtg, home_net_rtg, home_win_rate_last10, home_b2b,
   away_ortg, away_drtg, away_net_rtg, away_win_rate_last10, away_b2b,
   h2h_home_wins, h2h_away_wins,
   days_since_home_game, days_since_away_game,
   implied_prob_home, implied_prob_away, market_efficiency  [bookmaker]
+  home_win_slope, away_win_slope  [pente win/loss sur les 10 derniers matchs]
 
-France NT features (34) :
+France NT features (36) :
   elo_home, elo_away, elo_diff,
   dc_lam, dc_mu,
   dc_p_home, dc_p_draw, dc_p_away,
@@ -38,7 +40,8 @@ France NT features (34) :
   implied_prob_home, implied_prob_draw, implied_prob_away, market_efficiency  [bookmaker]
   home_injuries_count, away_injuries_count,  [agent contexte]
   home_rotation_signal, away_rotation_signal,
-  weather_rain_mm, weather_wind_kmh
+  weather_rain_mm, weather_wind_kmh,
+  home_form_slope, away_form_slope  [pente pts/match sur les 5 derniers matchs]
 """
 
 from __future__ import annotations
@@ -67,6 +70,7 @@ LIGUE1_FEATURES = [
     "home_injuries_count", "away_injuries_count",
     "home_rotation_signal", "away_rotation_signal",
     "weather_rain_mm", "weather_wind_kmh",
+    "home_form_slope", "away_form_slope",
 ]
 
 NBA_FEATURES = [
@@ -76,6 +80,7 @@ NBA_FEATURES = [
     "h2h_home_wins", "h2h_away_wins",
     "days_since_home_game", "days_since_away_game",
     "implied_prob_home", "implied_prob_away", "market_efficiency",
+    "home_win_slope", "away_win_slope",
 ]
 
 FRANCE_NT_FEATURES = [
@@ -95,6 +100,7 @@ FRANCE_NT_FEATURES = [
     "home_injuries_count", "away_injuries_count",
     "home_rotation_signal", "away_rotation_signal",
     "weather_rain_mm", "weather_wind_kmh",
+    "home_form_slope", "away_form_slope",
 ]
 
 # France NT team ID (API-Football)
@@ -109,6 +115,47 @@ _COMPETITION_TYPE: dict[str, float] = {
     "FIFA_WC":   3.0,
     "UEFA_EC":   3.0,
 }
+
+
+def _form_slope_pts(
+    team_id: str,
+    match_date: datetime,
+    all_matches: list[dict],
+    window: int = 5,
+) -> float:
+    """Pente de la série de points sur les `window` derniers matchs (plus ancien → récent).
+
+    Régression linéaire sur 3/1/0 pts. Positif = équipe en hausse, négatif = en baisse.
+    Retourne 0.0 si moins de 2 matchs disponibles.
+    """
+    games = [
+        m for m in all_matches
+        if (m["home_team_id"] == team_id or m["away_team_id"] == team_id)
+        and m["match_date"] < match_date
+        and m.get("home_score") is not None
+    ]
+    games = sorted(games, key=lambda x: x["match_date"])[-window:]
+    if len(games) < 2:
+        return 0.0
+
+    pts = []
+    for m in games:
+        is_home = m["home_team_id"] == team_id
+        gs = m["home_score"] if is_home else m["away_score"]
+        gc = m["away_score"] if is_home else m["home_score"]
+        if gs > gc:
+            pts.append(3.0)
+        elif gs == gc:
+            pts.append(1.0)
+        else:
+            pts.append(0.0)
+
+    n = len(pts)
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(pts) / n
+    num = sum((i - x_mean) * (pts[i] - y_mean) for i in range(n))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    return num / den if den > 0 else 0.0
 
 
 def _competition_type_value(competition: str) -> float:
@@ -278,6 +325,9 @@ def build_features_ligue1(
     rain_mm  = float(context.get("weather_rain_mm", 0.0)) if context else 0.0
     wind_kmh = float(context.get("weather_wind_kmh", 0.0)) if context else 0.0
 
+    h_slope = _form_slope_pts(home_team_id, match_date, all_matches)
+    a_slope = _form_slope_pts(away_team_id, match_date, all_matches)
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         lam, mu,
@@ -291,6 +341,7 @@ def build_features_ligue1(
         home_inj, away_inj,
         home_rot, away_rot,
         rain_mm, wind_kmh,
+        h_slope, a_slope,
     ]
     return vec, LIGUE1_FEATURES
 
@@ -327,6 +378,7 @@ def build_features_nba(
         h2h["h2h_home_wins"], h2h["h2h_away_wins"],
         days_h, days_a,
         imp_h, imp_a, overround,
+        h_stats["win_slope"], a_stats["win_slope"],
     ]
     return vec, NBA_FEATURES
 
@@ -385,6 +437,9 @@ def build_features_france_nt(
     rain_mm  = float(context.get("weather_rain_mm", 0.0)) if context else 0.0
     wind_kmh = float(context.get("weather_wind_kmh", 0.0)) if context else 0.0
 
+    h_slope = _form_slope_pts(home_team_id, match_date, all_matches)
+    a_slope = _form_slope_pts(away_team_id, match_date, all_matches)
+
     vec = [
         elo_h, elo_a, elo_h - elo_a,
         lam, mu,
@@ -402,5 +457,6 @@ def build_features_france_nt(
         home_inj, away_inj,
         home_rot, away_rot,
         rain_mm, wind_kmh,
+        h_slope, a_slope,
     ]
     return vec, FRANCE_NT_FEATURES

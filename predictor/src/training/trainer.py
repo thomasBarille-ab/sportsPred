@@ -3,7 +3,12 @@
 Ligue 1 : 3 classes (0=home win, 1=draw, 2=away win) — multi:softprob
 NBA      : 2 classes (0=away win, 1=home win) — binary:logistic
 
-Holdout : les 15% les plus récents sont utilisés pour l'évaluation uniquement.
+Split chronologique en 3 parties :
+  75% train → entraînement du modèle de validation
+  10% calibration → ajustement des calibrateurs isotoniques (jamais vu à l'entraînement)
+  15% test → métriques holdout vraiment non biaisées (jamais vu, jamais utilisé pour calibrer)
+  Exception : si la tranche calibration < 5 échantillons (France NT), on calibre sur le test.
+
 Temporal weighting : les matchs récents sont pondérés plus fortement
   (demi-vie de 365 jours).
 
@@ -68,7 +73,7 @@ HYPERPARAMS_FRANCE_NT: dict = {
     "reg_lambda": 2.0,
 }
 
-PIPELINE_VERSION = 5
+PIPELINE_VERSION = 6
 
 
 _NO_ODDS_FEATURES: frozenset[str] = frozenset({
@@ -342,15 +347,24 @@ def train_model(
     if len(finished) < min_samples:
         raise ValueError(f"Not enough finished matches for {sport}: {len(finished)} < {min_samples}")
 
-    split = max(1, int(len(finished) * (1 - holdout_fraction)))
-    train_matches = finished[:split]
-    test_matches  = finished[split:]
+    # ── Split chronologique 75 % / 10 % / 15 % ───────────────────────────────
+    # 75 % : entraînement du modèle de validation
+    # 10 % : calibration isotonique (jamais vu à l'entraînement)
+    # 15 % : évaluation (jamais vu, jamais utilisé pour calibrer)
+    _CALIB_FRACTION = 0.10
+    n = len(finished)
+    split_train = max(1, int(n * (1.0 - holdout_fraction - _CALIB_FRACTION)))
+    split_calib = max(split_train + 1, int(n * (1.0 - holdout_fraction)))
 
-    # ── Walk-forward Elo + DC sur les données d'entraînement ─────────────────
+    train_matches = finished[:split_train]
+    calib_matches = finished[split_train:split_calib]
+    test_matches  = finished[split_calib:]
+
+    # ── Walk-forward Elo + DC (train → calib → test, continuation) ───────────
     elo_state = build_elo_state(sport)
-    dc_state      = [None]          # DCModel courant (mutable)
-    dc_last_refit = [None]          # date du dernier refit
-    dc_x0         = [None]          # warm start
+    dc_state      = [None]
+    dc_last_refit = [None]
+    dc_x0         = [None]
 
     X_train, y_train, dates_train = _build_rows_walkforward(
         train_matches, sport,
@@ -361,11 +375,19 @@ def train_model(
         context_by_fixture=context_by_fixture,
     )
 
-    # ── Walk-forward Elo + DC sur le holdout (continuation) ──────────────────
+    X_calib, y_calib, _ = _build_rows_walkforward(
+        calib_matches, sport,
+        elo_state, dc_state, dc_last_refit, dc_x0,
+        all_past_fn=lambda i: train_matches + calib_matches[:i],
+        odds_by_fixture=odds_by_fixture,
+        availability_by_fixture=availability_by_fixture,
+        context_by_fixture=context_by_fixture,
+    )
+
     X_test, y_test, _ = _build_rows_walkforward(
         test_matches, sport,
         elo_state, dc_state, dc_last_refit, dc_x0,
-        all_past_fn=lambda i: train_matches + test_matches[:i],
+        all_past_fn=lambda i: train_matches + calib_matches + test_matches[:i],
         odds_by_fixture=odds_by_fixture,
         availability_by_fixture=availability_by_fixture,
         context_by_fixture=context_by_fixture,
@@ -380,6 +402,8 @@ def train_model(
 
     X_train_np = np.array(X_train)
     y_train_np = np.array(y_train)
+    X_calib_np = np.array(X_calib) if X_calib else np.empty((0, X_train_np.shape[1]))
+    y_calib_np = np.array(y_calib) if y_calib else np.array([], dtype=int)
     X_test_np  = np.array(X_test)
     y_test_np  = np.array(y_test)
     weights    = _sample_weights(dates_train)
@@ -396,32 +420,48 @@ def train_model(
         keep_indices = [i for i, f in enumerate(feature_names) if f not in _NO_ODDS_FEATURES]
         feature_names = [feature_names[i] for i in keep_indices]
         X_train_np = X_train_np[:, keep_indices]
+        if len(X_calib_np) > 0:
+            X_calib_np = X_calib_np[:, keep_indices]
         X_test_np  = X_test_np[:, keep_indices]
 
-    # ── Modèle de validation (métriques holdout) ──────────────────────────────
+    # ── Modèle de validation (entraîné sur 75 %) ─────────────────────────────
     val_model = _build_model(sport)
     X_train_np, y_train_np, weights = _pad_missing_classes(X_train_np, y_train_np, weights, sport)
     val_model.fit(X_train_np, y_train_np, sample_weight=weights)
 
-    proba = val_model.predict_proba(X_test_np)
-    brier, ll, acc = _compute_metrics(proba, y_test_np, sport)
-
-    # ── Calibration isotonique sur le holdout ────────────────────────────────
+    # ── Calibration isotonique sur les 10 % de calibration ───────────────────
+    # Si la tranche est trop petite (France NT / cold start), on calibre sur le test
     from sklearn.isotonic import IsotonicRegression
 
-    per_match_brier = _per_match_brier(proba, y_test_np, sport)
+    _use_calib_split = len(X_calib_np) >= 5
+    calib_proba = val_model.predict_proba(X_calib_np) if _use_calib_split else val_model.predict_proba(X_test_np)
+    calib_y     = y_calib_np if _use_calib_split else y_test_np
 
     calibrators: list[IsotonicRegression] = []
     if sport in _THREE_CLASS_SPORTS:
         for k in range(3):
-            y_k = (y_test_np == k).astype(float)
+            y_k = (calib_y == k).astype(float)
             cal = IsotonicRegression(out_of_bounds="clip")
-            cal.fit(proba[:, k], y_k)
+            cal.fit(calib_proba[:, k], y_k)
             calibrators.append(cal)
     else:
         cal = IsotonicRegression(out_of_bounds="clip")
-        cal.fit(proba[:, 1], (y_test_np == 1).astype(float))
+        cal.fit(calib_proba[:, 1], (calib_y == 1).astype(float))
         calibrators.append(cal)
+
+    # ── Métriques sur les 15 % de test (jamais vus, jamais utilisés pour calibrer) ──
+    proba = val_model.predict_proba(X_test_np)
+    brier, ll, acc = _compute_metrics(proba, y_test_np, sport)
+    per_match_brier = _per_match_brier(proba, y_test_np, sport)
+
+    log.info(
+        "trainer.split_sizes",
+        sport=sport,
+        n_train=len(X_train),
+        n_calib=len(X_calib),
+        n_test=len(X_test),
+        calib_from="calib_split" if _use_calib_split else "test_fallback",
+    )
 
     # ── Refit final sur 100 % des données ────────────────────────────────────
     # On rejoue le walk-forward complet sur all finished matches
