@@ -73,8 +73,11 @@ def _fetch_candidates() -> list[dict]:
         WHERE bs.id IS NULL
           AND f.status IN ('SCHEDULED', 'TIMED')
           AND f.match_date >= NOW() - INTERVAL '48 hours'
+          AND mo.bookmaker IN ('betclic', 'unibet')
         ORDER BY p.fixture_id,
-          CASE WHEN mo.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+          CASE WHEN mo.bookmaker = 'betclic' THEN 0
+               WHEN mo.bookmaker = 'unibet'  THEN 1
+               ELSE 2 END,
           mo.fetched_at DESC
         """
     )
@@ -97,7 +100,9 @@ def _fetch_market_candidates() -> list[dict]:
             mom.odds,
             ROW_NUMBER() OVER (
               PARTITION BY pm.fixture_id, pm.market, pm.selection, pm.line
-              ORDER BY CASE WHEN mom.bookmaker = 'pinnacle' THEN 0 ELSE 1 END,
+              ORDER BY CASE WHEN mom.bookmaker = 'betclic' THEN 0
+                            WHEN mom.bookmaker = 'unibet'  THEN 1
+                            ELSE 2 END,
                        mom.fetched_at DESC
             ) AS rn
           FROM predictions_markets pm
@@ -115,6 +120,7 @@ def _fetch_market_candidates() -> list[dict]:
                 )
             AND f.status IN ('SCHEDULED', 'TIMED')
             AND f.match_date >= NOW() - INTERVAL '48 hours'
+            AND mom.bookmaker IN ('betclic', 'unibet')
         )
         SELECT fixture_id, market, selection, line, prob, bookmaker, odds
         FROM ranked

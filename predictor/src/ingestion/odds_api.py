@@ -30,8 +30,8 @@ SPORT_KEYS: dict[str, str | list[str]] = {
     ],
 }
 
-# Ordre de préférence — Pinnacle est le bookmaker le plus "sharp" (meilleures implied proba)
-_PREFERRED_BOOKMAKERS = ["pinnacle", "bet365", "williamhill", "unibet", "betfair_ex_eu"]
+# Betclic en priorité (cotes réalistes FR), Unibet en fallback
+_PREFERRED_BOOKMAKERS = ["betclic", "unibet"]
 
 
 @dataclass
