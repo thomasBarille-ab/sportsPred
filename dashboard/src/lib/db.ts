@@ -198,14 +198,38 @@ export async function getBettingKPIs() {
 
 export async function getBankrollHistory() {
   return sql`
+    WITH daily AS (
+      SELECT
+        DATE_TRUNC('day', settled_at) AS day,
+        SUM(pnl_units)                AS daily_pnl
+      FROM bet_simulations
+      WHERE status IN ('won', 'lost')
+      GROUP BY DATE_TRUNC('day', settled_at)
+    )
     SELECT
-      DATE_TRUNC('day', settled_at)                         AS day,
-      SUM(pnl_units) OVER (ORDER BY settled_at)             AS cumulative_pnl,
-      pnl_units,
-      status
-    FROM bet_simulations
-    WHERE status IN ('won', 'lost')
-    ORDER BY settled_at
+      day,
+      SUM(daily_pnl) OVER (ORDER BY day) AS cumulative_pnl
+    FROM daily
+    ORDER BY day
+  `;
+}
+
+export async function getNbaDaySummary() {
+  return sql`
+    SELECT
+      DATE_TRUNC('day', f.match_date)                        AS match_day,
+      COUNT(p.id)                                            AS total,
+      COUNT(ps.id)                                           AS scored,
+      SUM(ps.is_correct::int)                                AS correct,
+      ROUND(AVG(ps.is_correct::int::float)::numeric, 3)     AS accuracy,
+      ROUND(AVG(ps.brier_score)::numeric, 4)                 AS avg_brier
+    FROM fixtures f
+    JOIN predictions p ON p.fixture_id = f.id
+    LEFT JOIN prediction_scores ps ON ps.fixture_id = f.id
+    WHERE f.sport = 'nba'
+    GROUP BY DATE_TRUNC('day', f.match_date)
+    ORDER BY match_day DESC
+    LIMIT 60
   `;
 }
 

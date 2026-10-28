@@ -2,6 +2,7 @@ import {
   getAccuracyOverTime,
   getCalibrationData,
   getRecentPredictions,
+  getNbaDaySummary,
 } from "@/lib/db";
 import AccuracyChart from "@/components/AccuracyChart";
 import CalibrationChart from "@/components/CalibrationChart";
@@ -22,10 +23,11 @@ const OUTCOME_STYLE: Record<string, string> = {
 };
 
 export default async function NbaPage() {
-  const [accuracy, calibration, recent] = await Promise.all([
+  const [accuracy, calibration, recent, daySummary] = await Promise.all([
     getAccuracyOverTime("nba").catch(() => []),
     getCalibrationData("nba").catch(() => []),
     getRecentPredictions("nba", 25).catch(() => []),
+    getNbaDaySummary().catch(() => []),
   ]);
 
   const now = new Date();
@@ -46,6 +48,68 @@ export default async function NbaPage() {
         </p>
         <CalibrationChart data={calibration as any[]} />
       </div>
+
+      {(daySummary as any[]).length > 0 && (
+        <div className="card">
+          <h2 className="text-base font-semibold mb-4">Résumé par jour</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted border-b border-border">
+                  <th className="text-left py-2 pr-6">Date</th>
+                  <th className="text-center py-2 pr-6">Prédits</th>
+                  <th className="text-center py-2 pr-6">Corrects</th>
+                  <th className="text-center py-2 pr-6">Accuracy</th>
+                  <th className="text-right py-2">Brier moy.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(daySummary as any[]).map((row, i) => {
+                  const acc = row.accuracy != null ? Number(row.accuracy) : null;
+                  const correct = Number(row.correct ?? 0);
+                  const scored = Number(row.scored ?? 0);
+                  const total = Number(row.total ?? 0);
+                  const day = row.matchDay ? new Date(row.matchDay) : null;
+
+                  const accStyle =
+                    acc == null
+                      ? "text-muted"
+                      : acc >= 0.6
+                      ? "text-emerald-400 font-semibold"
+                      : acc >= 0.4
+                      ? "text-yellow-400"
+                      : "text-red-400";
+
+                  return (
+                    <tr key={i} className="border-b border-border/40 hover:bg-white/5 transition-colors">
+                      <td className="py-2.5 pr-6 font-semibold whitespace-nowrap">
+                        {day ? day.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                      </td>
+                      <td className="py-2.5 pr-6 text-center text-muted">{total}</td>
+                      <td className="py-2.5 pr-6 text-center">
+                        {scored > 0 ? (
+                          <span>
+                            {correct}{" "}
+                            <span className="text-muted text-xs">/ {scored}</span>
+                          </span>
+                        ) : (
+                          <span className="text-muted text-xs">—</span>
+                        )}
+                      </td>
+                      <td className={`py-2.5 pr-6 text-center ${accStyle}`}>
+                        {acc != null ? `${Math.round(acc * 100)} %` : "—"}
+                      </td>
+                      <td className="py-2.5 text-right text-muted text-xs font-mono tabular-nums">
+                        {row.avgBrier != null ? Number(row.avgBrier).toFixed(4) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="text-base font-semibold mb-4">Prédictions récentes</h2>
