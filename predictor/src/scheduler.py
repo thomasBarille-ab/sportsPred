@@ -29,9 +29,9 @@ from .ingestion.football_data import FootballDataProvider
 from .ingestion.france_nt import FranceNTProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
-from .jobs.llm_agent_predict import run_llm_agent_predict
-from .jobs.llm_agent_evaluate import run_llm_agent_evaluate
 from .jobs.bet_simulation import run_bet_simulation
+from .jobs.llm_agent_evaluate import run_llm_agent_evaluate
+from .jobs.llm_agent_predict import run_llm_agent_predict
 from .jobs.context_agent import run_context_agent
 from .jobs.odds_backfill import run_odds_backfill
 from .jobs.odds_ingest import run_odds_ingest
