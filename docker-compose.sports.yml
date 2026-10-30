@@ -57,6 +57,8 @@ services:
       ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
       ODDS_API_KEY: ${ODDS_API_KEY:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      AGENT_OLLAMA_URL: ${AGENT_OLLAMA_URL:-http://ollama:11434}
+      AGENT_OLLAMA_MODEL: ${AGENT_OLLAMA_MODEL:-qwen2.5:7b}
     volumes:
       - predictor_models:/models
     networks:

@@ -233,6 +233,61 @@ export async function getNbaDaySummary() {
   `;
 }
 
+export async function getAgentPredictions(limit = 100) {
+  return sql`
+    SELECT
+      f.id             AS fixture_id,
+      f.sport,
+      f.home_team_name,
+      f.away_team_name,
+      f.match_date,
+      ap.predicted_outcome  AS agent_outcome,
+      ap.confidence,
+      ap.reasoning,
+      ap.model_name,
+      ap.created_at    AS agent_predicted_at,
+      p.predicted_outcome   AS ml_outcome,
+      r.actual_outcome,
+      r.home_score,
+      r.away_score,
+      las.is_correct   AS agent_correct,
+      las.brier_score  AS agent_brier,
+      ps.is_correct    AS ml_correct,
+      ps.brier_score   AS ml_brier
+    FROM llm_agent_predictions ap
+    JOIN fixtures f    ON f.id = ap.fixture_id
+    LEFT JOIN predictions p     ON p.fixture_id = f.id
+    LEFT JOIN results r         ON r.fixture_id = f.id
+    LEFT JOIN llm_agent_scores las ON las.agent_prediction_id = ap.id
+    LEFT JOIN prediction_scores ps ON ps.fixture_id = f.id
+      AND ps.prediction_id = p.id
+    ORDER BY f.match_date DESC
+    LIMIT ${limit}
+  `;
+}
+
+export async function getAgentStats() {
+  return sql`
+    SELECT
+      f.sport,
+      COUNT(ap.id)                                              AS agent_total,
+      COUNT(las.id)                                             AS agent_scored,
+      SUM(las.is_correct::int)                                  AS agent_correct,
+      ROUND(AVG(las.is_correct::int::float)::numeric, 3)        AS agent_accuracy,
+      ROUND(AVG(las.brier_score)::numeric, 4)                   AS agent_brier,
+      COUNT(ps.id)                                              AS ml_scored,
+      ROUND(AVG(ps.is_correct::int::float)::numeric, 3)         AS ml_accuracy,
+      ROUND(AVG(ps.brier_score)::numeric, 4)                    AS ml_brier
+    FROM llm_agent_predictions ap
+    JOIN fixtures f      ON f.id = ap.fixture_id
+    LEFT JOIN llm_agent_scores las  ON las.agent_prediction_id = ap.id
+    LEFT JOIN predictions p         ON p.fixture_id = f.id
+    LEFT JOIN prediction_scores ps  ON ps.fixture_id = f.id
+      AND ps.prediction_id = p.id
+    GROUP BY f.sport
+  `;
+}
+
 export async function getUpcomingValueBets() {
   return sql`
     SELECT

@@ -29,6 +29,8 @@ from .ingestion.football_data import FootballDataProvider
 from .ingestion.france_nt import FranceNTProvider
 from .jobs import evaluate, ingest, predict, retrain
 from .jobs.agent_analysis import run_agent_analysis_job
+from .jobs.llm_agent_predict import run_llm_agent_predict
+from .jobs.llm_agent_evaluate import run_llm_agent_evaluate
 from .jobs.bet_simulation import run_bet_simulation
 from .jobs.context_agent import run_context_agent
 from .jobs.odds_backfill import run_odds_backfill
@@ -184,6 +186,13 @@ def _job_predict(cfg: Settings) -> None:
 def _job_evaluate() -> None:
     for sport in ("ligue1", "nba", "france_nt"):
         _log_job("evaluate", sport, evaluate.run_evaluate, sport)
+    for sport in ("ligue1", "nba"):
+        _log_job("llm_agent_evaluate", sport, run_llm_agent_evaluate, sport)
+
+
+def _job_llm_agent_predict(cfg: Settings) -> None:
+    _log_job("llm_agent_predict", None, run_llm_agent_predict,
+             cfg.agent_ollama_url, cfg.agent_ollama_model)
 
 
 def _job_agent_analysis(cfg: Settings) -> None:
@@ -362,6 +371,12 @@ def start_scheduler(cfg: Settings) -> None:
         lambda: _job_context_agent(cfg),
         CronTrigger(hour=18, minute=0),
         id="context_agent", name="Agent contexte pré-match (météo + blessures J-1)",
+        max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: _job_llm_agent_predict(cfg),
+        CronTrigger(minute="*/30"),
+        id="llm_agent_predict", name="Agent LLM prédiction (1h avant chaque match)",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(

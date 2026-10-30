@@ -10,6 +10,7 @@ const links: NavLink[] = [
   { href: "/models",  label: "Modèles" },
   { href: "/logs",    label: "Logs" },
   { href: "/betting", label: "Paris" },
+  { href: "/agent",   label: "Agent LLM", badge: "Nouveau" },
 ];
 
 export default function Nav() {
