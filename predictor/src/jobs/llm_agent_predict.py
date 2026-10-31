@@ -17,7 +17,6 @@ from ..ingestion.web_search import search_match_context
 
 log = structlog.get_logger()
 
-_SPORTS = ("ligue1", "nba")
 _LOOKAHEAD_MIN = 5    # ne pas prédire un match déjà commencé
 _LOOKAHEAD_MAX = 90   # fenêtre : matchs qui démarrent dans les 90 prochaines minutes
 
@@ -30,7 +29,7 @@ def _fetch_upcoming(now: datetime) -> list[dict]:
         """
         SELECT f.id, f.sport, f.home_team_name, f.away_team_name, f.match_date
         FROM fixtures f
-        WHERE f.sport = ANY(%s)
+        WHERE f.sport IN ('ligue1', 'nba')
           AND f.status IN ('SCHEDULED', 'TIMED')
           AND f.match_date BETWEEN %s AND %s
           AND NOT EXISTS (
@@ -38,7 +37,7 @@ def _fetch_upcoming(now: datetime) -> list[dict]:
           )
         ORDER BY f.match_date
         """,
-        (_SPORTS, horizon_min, horizon_max),
+        (horizon_min, horizon_max),
     )
 
 
